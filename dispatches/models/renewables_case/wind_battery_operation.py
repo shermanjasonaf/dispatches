@@ -310,8 +310,8 @@ def create_two_stg_wind_battery_model(lmp_signal):
 def advance_time(
         model,
         new_lmp_sig,
-        lmp_set_class,
-        lmp_set_class_params,
+        lmp_set_class=None,
+        lmp_set_class_params=None,
         wind_capacity=200e3,
         battery_power_capacity=25e3,
         battery_energy_capacity=100e3,
@@ -320,7 +320,7 @@ def advance_time(
     Advance model instance to next time period, and
     construct an updated uncertainty set.
     """
-    assert len(new_lmp_sig) == len(model.pyomo_model.Horizon)
+    assert len(new_lmp_sig) == len(model.get_active_process_blocks())
 
     from dispatches.models.renewables_case.load_parameters import wind_speeds
     new_time = model.pyomo_model.TIME.last() + 1
@@ -364,8 +364,65 @@ def advance_time(
     })
     construct_profit_obj(model, lmp_sig)
 
-    # construct an updated uncertainty set
-    return lmp_set_class(new_lmp_sig, **lmp_set_class_params)
+    # construct an updated uncertainty set (if constructor provided)
+    if lmp_set_class is not None:
+        return lmp_set_class(new_lmp_sig, **lmp_set_class_params)
+
+
+def solve_rolling_horizon(
+        model,
+        solver,
+        lmp_signal_filename,
+        control_length,
+        num_steps,
+        start,
+        **solver_kwargs,
+        ):
+    """
+    Solve the deterministic wind-battery model on a rolling horizon.
+    """
+    # cannot control beyond prediction horizon
+    prediction_length = len(model.get_active_process_blocks())
+    assert prediction_length >= control_length
+
+    # obtain new LMP signal
+    lmp_signal = get_lmp_data(
+        lmp_signal_filename,
+        (num_steps - 1) * control_length + prediction_length,
+        start=start,
+    ) / 1e3
+
+    lmp_start = 0
+    for idx in range(num_steps):
+        if idx == 0:
+            # set up extended LMP signal.
+            # this changes the LMP values for the currently
+            # active process blocks
+            lmp_sig = {
+                t: pyo.value(model.pyomo_model.LMP[t])
+                for t in range(model.current_time + 1)
+            }
+            lmp_sig.update({
+                t + model.current_time: lmp_signal[t]
+                for t in range(prediction_length)
+            })
+            construct_profit_obj(model, lmp_sig)
+        else:
+            # advance the model in time, extend LMP signal
+            for step in range(control_length):
+                lmp_start += 1
+                lmp_stop = lmp_start + prediction_length
+                advance_time(model, lmp_signal[lmp_start:lmp_stop])
+
+        # solve pyomo model
+        res = solver.solve(model.pyomo_model, **solver_kwargs)
+        revenue = pyo.value(
+            pyo.dot_product(
+                model.pyomo_model.LMP,
+                model.pyomo_model.TotalPowerOutput,
+            )
+        )
+        print(model.current_time, res.problem.lower_bound, revenue)
 
 
 def perform_incidence_analysis(model):
@@ -455,8 +512,11 @@ if __name__ == "__main__":
     os.makedirs(base_dir, exist_ok=True)
 
     # get LMP data (and convert to $/kWh)
+    lmp_signal_filename = (
+        "../../../../results/lmp_data/rts_results_all_prices.npy"
+    )
     lmp_signal = get_lmp_data(
-        "../../../../results/lmp_data/rts_results_all_prices.npy",
+        lmp_signal_filename,
         n_time_points,
         start=start,
     ) / 1e3
