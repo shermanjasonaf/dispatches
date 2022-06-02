@@ -310,12 +310,15 @@ def create_two_stg_wind_battery_model(lmp_signal):
 def advance_time(
         model,
         new_lmp_sig,
+        lmp_set_class,
+        lmp_set_class_params,
         wind_capacity=200e3,
         battery_power_capacity=25e3,
         battery_energy_capacity=100e3,
         ):
     """
-    Advance model instance to next time period.
+    Advance model instance to next time period, and
+    construct an updated uncertainty set.
     """
     assert len(new_lmp_sig) == len(model.pyomo_model.Horizon)
 
@@ -360,6 +363,9 @@ def advance_time(
         for t in range(len(new_lmp_sig))
     })
     construct_profit_obj(model, lmp_sig)
+
+    # construct an updated uncertainty set
+    return lmp_set_class(new_lmp_sig, **lmp_set_class_params)
 
 
 def perform_incidence_analysis(model):
@@ -434,8 +440,18 @@ if __name__ == "__main__":
     moving_avg_multiplier = 0.1
     n_time_points = horizon
 
+    # container for LMP set parameterization
+    lmp_set_params = dict(
+        n_recent=n_recent,
+        growth_rate=box_growth_rate,
+        avg_multiplier=moving_avg_multiplier,
+        latency=hyster_latency,
+        start_day_hour=0,
+        include_peak_effects=True,
+    )
+
     # make directory for storing results
-    base_dir = f"../../../../results/hor_{horizon}_start_{start}"
+    base_dir = f"../../../../results/results/hor_{horizon}_start_{start}"
     os.makedirs(base_dir, exist_ok=True)
 
     # get LMP data (and convert to $/kWh)
@@ -446,15 +462,7 @@ if __name__ == "__main__":
     ) / 1e3
 
     # construct container for uncertainty set
-    hyster_lmp_set = HysterLMPBoxSet(
-        lmp_signal,
-        n_recent,
-        box_growth_rate,
-        moving_avg_multiplier,
-        hyster_latency,
-        start_day_hour=0,
-        include_peak_effects=True,
-    )
+    hyster_lmp_set = HysterLMPBoxSet(lmp_signal, **lmp_set_params)
 
     # create model, and obtain degree-of-freedom partitioning
     model = create_two_stg_wind_battery_model(hyster_lmp_set.lmp_sig_nom)
@@ -597,5 +605,4 @@ if __name__ == "__main__":
         )
     )
     print("best-case revenue", rev)
-
     pdb.set_trace()
