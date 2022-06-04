@@ -198,6 +198,14 @@ def plot_results(model, lmp_set, custom_lmp_vals=None,
 def construct_profit_obj(model, lmp_signal):
     """
     Construct model LMP profit objective.
+
+    Parameters
+    ----------
+    model : MultiPeriodModel
+        Model of interest.
+    lmp_signal : array-like
+        LMP signal. Must contain as many entries are there are
+        process blocks in the model.
     """
     horizon = len(lmp_signal)
     pyomo_model = model.pyomo_model
@@ -248,7 +256,8 @@ def construct_profit_obj(model, lmp_signal):
 
 def get_dof_vars(model):
     """
-    Obtain first-stage and second-stage degrees of freedom.
+    Obtain first-stage and second-stage degrees of freedom
+    for all active model blocks.
     """
     active_blks = model.get_active_process_blocks()
 
@@ -269,7 +278,7 @@ def get_dof_vars(model):
 
 def get_uncertain_params(model):
     """
-    Obtain model's uncertain parameters.
+    Obtain uncertain parameters for all active model blocks.
     """
     start_time = model.current_time
     return list(
@@ -281,6 +290,17 @@ def create_two_stg_wind_battery_model(lmp_signal):
     """
     Create a two-stage surrogate of the multi-stage
     wind battery model.
+
+    Parameters
+    ----------
+    lmp_signal : array-like
+        LMP signal, of which the number of entries is equal
+        to the model's prediction horizon length.
+
+    Returns
+    -------
+    model : MultiPeriodModel
+        Model.
     """
     horizon = len(lmp_signal)
 
@@ -319,6 +339,32 @@ def advance_time(
     """
     Advance model instance to next time period, and
     construct an updated uncertainty set.
+
+    Parameters
+    ----------
+    model : MultiPeriodModel
+        Model of interest.
+    new_lmp_sig : array-like
+        LMP signal values for next prediction horizon.
+        The number of entries must be equal to the
+        model's prediction horizon length (number of active blocks).
+    lmp_set_class : array-like, optional
+        Constructor for LMP uncertainty set. This is used to update
+        the uncertainty set in tandem with the active process
+        blocks.
+    lmp_set_class_params : dict, optional
+        Keyword arguments to the LMP uncertainty set constructor.
+    wind_capacity : float, optional
+        Wind production capacity.
+    battery_power_capacity : float, optional
+        Battery power capacity.
+    battery_energy_capacity : float, optional
+        Battery energy capacity.
+
+    Returns
+    -------
+    An updated LMP uncertainty set, if a constructor is provided
+    through the `lmp_set_class` argument.
     """
     assert len(new_lmp_sig) == len(model.get_active_process_blocks())
 
@@ -380,6 +426,28 @@ def solve_rolling_horizon(
         ):
     """
     Solve the deterministic wind-battery model on a rolling horizon.
+
+    Parameters
+    ----------
+    model : MultiPeriodModel
+        Model of interest.
+    solver : pyomo SolverFactory object
+        Optimizer used to solve the model.
+    lmp_signal_filename : path-like
+        Path to LMP signal data file.
+    control_length : int
+        Control horizon length, i.e. number of periods
+        for which the optimal settings in each period
+        are actually used.
+    num_steps : int
+        Number of prediction horizons for which to solve the model.
+        (One plus the number of times to update the
+        active time periods/blocks.)
+    start : int
+        Starting index for the LMP signal extracted from the
+        data file at the path specified by `lmp_signal_filename`.
+    solver_kwargs : dict, optional
+        Keyword arguments to the method `solver.solve()`.
     """
     # cannot control beyond prediction horizon
     prediction_length = len(model.get_active_process_blocks())
