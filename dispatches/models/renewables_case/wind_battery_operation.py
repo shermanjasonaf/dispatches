@@ -34,26 +34,97 @@ from lmp_uncertainty_models.lmp_uncertainty_models import (
 )
 
 
-def plot_soc_results(mp_model, lmp_set, plot_uncertainty=True, filename=None,
-                     custom_lmp_vals=None):
+def plot_soc_results(
+        mp_model,
+        lmp_set=None,
+        plot_lmp=True,
+        plot_uncertainty=True,
+        filename=None,
+        start=None,
+        stop=None,
+        highlight_active_periods=False,
+        custom_lmp_vals=None,
+        lmp_bounds=None,
+        ):
     """
-    Plot battery SOC results
+    Plot battery state-of-charge values (in MWh).
+
+    Parameters
+    ----------
+    mp_model : MultiPeriodModel
+        Model of interest.
+    lmp_set : LMPBoxSet, optional
+        LMP uncertainty set. The default is None.
+        If an LMP set is provided, the band of uncertainty
+        is plotted provied `plot_lmp` is set to `True`.
+        The dimension of the set must be equal to `mp_model`'s prediction
+        horizon length (i.e. number of active process blocks).
+    plot_lmp : bool, optional
+        Plot LMP signal values along with the state of charge values.
+        The default is `True`.
+    plot_uncertainty : bool, optional
+        Plot LMP uncertainty set bounds. The default is `False`.
+    filename : path-like, optional
+        Output file path. The default is `None`, in which
+        case the plot is not exported to file.
+    start : int, optional
+        First period to include in the plot.
+        The default is `None`, in which case `mp_model.current_time`
+        is used.
+    stop : int, optional
+        Last period to include in the plot.
+        The default is `None`, in which case the model's last
+        active time is used.
+    highlight_active_periods : bool, optional
+        Highlight periods corresponding to the model's active blocks,
+        (or more precisely, dim periods corresponding to inactive
+        process blocks).
+        The default is `False`.
+    custom_lmp_vals : dict, optional
+        Custom LMP signal values to include in the plot;
+        these values are added to the plot only if `plot_lmp`.
+        is set to `True`. The default is `None`.
+        If a dictionary is provided, then the keys are the plot legend
+        labels, the values are array-like objects whose entries are
+        the LMP signal values (in $/MWh).
+    lmp_bounds : tuple, optional
+        A 2-tuple of bounds to be used for the LMP signal plot axis.
+        The default is `None`, in which case the greatest upper bound
+        and smallest lower bound from the LMP uncertainty set
+        are used for the axis bounds
+        (if an uncertainty set is provided).
     """
     active_blks = mp_model.get_active_process_blocks()
 
     fig, ax1 = plt.subplots(figsize=(9, 8))
     ax1.grid(False)
 
+    # get model blocks of interest
+    start = model.current_time if start is None else start
+    stop = model.current_time + len(active_blks) - 1 if stop is None else stop
+
+    assert start >= 0
+    assert stop < len(mp_model.pyomo_model.blocks)
+
+    if lmp_bounds is not None:
+        assert lmp_bounds[0] < lmp_bounds[1]
+
+    periods = np.array(range(start, stop + 1), dtype=int)
+    active_start = model.current_time
+    blocks = list(
+        blk.process
+        for idx, blk in enumerate(mp_model.pyomo_model.blocks.values())
+        if idx >= start and idx <= stop
+    )
+
     # initialize containers
     charges = list()
-    periods = list()
     lmp_values = list()
     charge_bounds = list()
 
-    for t, blk in enumerate(active_blks):
+    for t, blk in zip(periods, blocks):
         charges.append(pyo.value(blk.fs.battery.state_of_charge[0.0]))
-        periods.append(t)
-        lmp_values.append(pyo.value(mp_model._pyomo_model.LMP[t]))
+        lmp_values.append(pyo.value(mp_model.pyomo_model.LMP[t]))
 
         charge_lim = pyo.value(
             blk.fs.battery.nameplate_energy
@@ -62,41 +133,85 @@ def plot_soc_results(mp_model, lmp_set, plot_uncertainty=True, filename=None,
         )
         charge_bounds.append(charge_lim)
 
-    ax1.plot(periods, np.array(charges) / 1e3,
-             label="state of charge", linewidth=1.8,
-             color="blue")
-    ax1.plot(periods, np.array(charges) / 1e3,
-             label="charging limit", linewidth=1.8,
-             color="red", linestyle="dashed")
+    # plot results for active periods
+    if periods[periods >= active_start].size > 0:
+        active_qual = " (active)" if highlight_active_periods else ""
+        ax1.plot(
+            periods[periods >= active_start],
+            np.array(charges)[periods >= active_start] / 1e3,
+            label="state of charge" + active_qual,
+            linewidth=1.8,
+            color="blue"
+        )
+        ax1.plot(
+            periods[periods >= active_start],
+            np.array(charge_bounds)[periods >= active_start] / 1e3,
+            label="charging limit" + active_qual,
+            linewidth=1.8,
+            color="red",
+            linestyle="dashed",
+        )
+
+    # plot results for inactive periods
+    if periods[periods < active_start].size > 0:
+        alpha = 0.3 if highlight_active_periods else 1
+        ax1.plot(
+            periods[periods <= active_start],
+            np.array(charges)[periods <= active_start] / 1e3,
+            label="state of charge" if highlight_active_periods else None,
+            linewidth=1.8,
+            color="blue",
+            alpha=alpha,
+        )
+        ax1.plot(
+            periods[periods <= active_start],
+            np.array(charge_bounds)[periods <= active_start] / 1e3,
+            label="charging limit" if highlight_active_periods else None,
+            linewidth=1.8,
+            color="red",
+            linestyle="dashed",
+            alpha=alpha,
+        )
+
     ax1.set_xlabel("Period (hr)")
     ax1.set_ylabel("State of charge (MWh)")
     # ax1.set_xticks(model._pyomo_model.Horizon)
     ax1.legend(bbox_to_anchor=(0, -0.15), loc="upper left", ncol=1)
 
-    ax2 = ax1.twinx()
-    ax2.grid(False)
-    ax2.set_ylabel("LMP Signal ($/MWh)", color="black")
-    if plot_uncertainty:
-        lmp_set.lmp_sig_nom *= 1e3
-        lmp_set.plot_bounds(ax2)
-        lmp_set.lmp_sig_nom *= 1e-3
-    else:
-        ax2.plot(periods, np.array(lmp_values) * 1e3,
-                 label="LMP", linewidth=1.8,
-                 color="black")
-    custom_lmp_vals = [] if custom_lmp_vals is None else custom_lmp_vals
-    for val in custom_lmp_vals:
-        lmp_arr = np.array(val) * 1e3
-        ax2.plot(periods, lmp_arr, label="worst case", linewidth=1.8,
-                 color="green")
-    ax2.legend(bbox_to_anchor=(1, -0.15), loc="upper right", ncol=1)
+    if plot_lmp:
+        ax2 = ax1.twinx()
+        ax2.grid(False)
+        ax2.set_ylabel("LMP Signal ($/MWh)", color="black")
+        if plot_uncertainty and lmp_set is not None:
+            # plot LMP uncertainty set bounds.
+            # NOTE: the LMPs are scaled to MWh before plotting
+            #       since the values provided are in kWh
+            # TODO: enforce LMP units at model declaration
+            lmp_set.lmp_sig_nom *= 1e3
+            lmp_set.plot_bounds(ax2, offset=start)
+            lmp_set.lmp_sig_nom *= 1e-3
+        else:
+            ax2.plot(periods, np.array(lmp_values) * 1e3,
+                     label="LMP", linewidth=1.8,
+                     color="black")
+        custom_lmp_vals = [] if custom_lmp_vals is None else custom_lmp_vals
+        for val in custom_lmp_vals:
+            lmp_arr = np.array(val) * 1e3
+            ax2.plot(periods, lmp_arr, label="worst case", linewidth=1.8,
+                     color="green")
+        ax2.legend(bbox_to_anchor=(1, -0.15), loc="upper right", ncol=1)
 
-    # get LMP axis bounds
-    lmp_bounds = lmp_set.bounds()
-    y_min = min(bound[0] for bound in lmp_bounds) * 1e3
-    y_max = max(bound[1] for bound in lmp_bounds) * 1e3
-
-    ax2.set_ylim([y_min, y_max])
+        # set LMP axis bounds
+        if lmp_bounds is None:
+            if lmp_set is not None:
+                lmp_bounds = lmp_set.bounds()
+                y_min = min(bound[0] for bound in lmp_bounds) * 1e3
+                y_max = max(bound[1] for bound in lmp_bounds) * 1e3
+                ax2.set_ylim([y_min, y_max])
+        else:
+            y_min = lmp_bounds[0]
+            y_max = lmp_bounds[1]
+            ax2.set_ylim([y_min, y_max])
 
     if filename is not None:
         plt.savefig(filename, bbox_inches="tight", dpi=300)
@@ -104,71 +219,161 @@ def plot_soc_results(mp_model, lmp_set, plot_uncertainty=True, filename=None,
     plt.close()
 
 
-def plot_output_results(mp_model, lmp_set, plot_uncertainty=True,
-                        custom_lmp_vals=None, filename=None):
+def plot_power_output_results(
+        mp_model,
+        lmp_set=None,
+        plot_lmp=True,
+        plot_uncertainty=True,
+        filename=None,
+        start=None,
+        stop=None,
+        highlight_active_periods=False,
+        custom_lmp_vals=None,
+        lmp_bounds=None,
+        ):
     """
-    Plot model results.
+    Plot model power output results
+    (wind production, battery-to-grid discharge,
+    and wind-to-grid power).
+
+    Arguments
+    ---------
+    Same as those used for `plot_soc_results`.
     """
     active_blks = mp_model.get_active_process_blocks()
 
     fig, ax1 = plt.subplots(figsize=(9, 8))
     ax1.grid(False)
 
+    # get model blocks of interest
+    start = model.current_time if start is None else start
+    stop = model.current_time + len(active_blks) - 1 if stop is None else stop
+
+    assert start >= 0
+    assert stop < len(mp_model.pyomo_model.blocks)
+
+    if lmp_bounds is not None:
+        assert lmp_bounds[0] < lmp_bounds[1]
+
+    periods = np.array(range(start, stop + 2))
+    active_start = model.current_time
+    blocks = list(
+        blk.process
+        for idx, blk in enumerate(mp_model.pyomo_model.blocks.values())
+        if idx >= start and idx <= stop
+    )
+
     # initialize containers
     battery_elecs = list()
     grid_elecs = list()
     wind_outputs = list()
-    periods = list()
     lmp_values = list()
 
-    for t, blk in enumerate(active_blks):
+    for t, blk in zip(periods, blocks):
         battery_elecs.append(pyo.value(blk.fs.battery.elec_out[0]))
         grid_elecs.append(pyo.value(blk.fs.splitter.grid_elec[0]))
         wind_outputs.append(pyo.value(blk.fs.windpower.electricity[0]))
-        periods.append(t)
         lmp_values.append(pyo.value(mp_model._pyomo_model.LMP[t]))
 
-    ax1.step(periods, np.array(wind_outputs) / 1e3, where="post",
-             label="wind power production", linewidth=1.8,
-             color="purple", linestyle="dashed")
-    ax1.step(periods, np.array(grid_elecs) / 1e3, label="wind-to-grid",
-             where="post",
-             linewidth=1.8,
-             color="red")
-    ax1.step(periods, np.array(battery_elecs) / 1e3,
-             label="battery-to-grid", linewidth=1.8,
-             where="post",
-             color="blue")
+    battery_elecs.append(battery_elecs[-1])
+    grid_elecs.append(grid_elecs[-1])
+    wind_outputs.append(wind_outputs[-1])
+
+    if periods[periods >= active_start].size > 0:
+        active_qual = " (active)" if highlight_active_periods else ""
+        ax1.step(
+            periods[periods >= active_start],
+            np.array(grid_elecs)[periods >= active_start] / 1e3,
+            label="wind-to-grid" + active_qual,
+            where="post",
+            linewidth=1.8,
+            color="red",
+        )
+        ax1.step(
+            periods[periods >= active_start],
+            np.array(battery_elecs)[periods >= active_start] / 1e3,
+            label="battery-to-grid" + active_qual,
+            linewidth=1.8,
+            where="post",
+            color="blue",
+        )
+        ax1.step(
+            periods[periods >= active_start],
+            np.array(wind_outputs)[periods >= active_start] / 1e3,
+            where="post",
+            label="wind production" + active_qual,
+            linewidth=1.8,
+            color="purple",
+            linestyle="dashed",
+        )
+
+    if periods[periods < active_start].size > 0:
+        alpha = 0.3 if highlight_active_periods else 1
+        ax1.step(
+            periods[periods <= active_start],
+            np.array(grid_elecs)[periods <= active_start] / 1e3,
+            label="wind-to-grid" if highlight_active_periods else None,
+            where="post",
+            linewidth=1.8,
+            color="red",
+            alpha=alpha,
+        )
+        ax1.step(
+            periods[periods <= active_start],
+            np.array(battery_elecs)[periods <= active_start] / 1e3,
+            label="battery-to-grid" if highlight_active_periods else None,
+            linewidth=1.8,
+            where="post",
+            color="blue",
+            alpha=alpha,
+        )
+        ax1.step(
+            periods[periods <= active_start],
+            np.array(wind_outputs)[periods <= active_start] / 1e3,
+            where="post",
+            label="wind production" if highlight_active_periods else None,
+            linewidth=1.8,
+            color="purple",
+            linestyle="dashed",
+            alpha=alpha,
+        )
+
     ax1.set_xlabel("Period (hr)")
     ax1.set_ylabel("Power Output (MW)")
     # ax1.set_xticks(model._pyomo_model.Horizon)
     ax1.legend(bbox_to_anchor=(0, -0.15), loc="upper left", ncol=1)
 
-    ax2 = ax1.twinx()
-    ax2.grid(False)
-    ax2.set_ylabel("LMP Signal ($/MWh)", color="black")
-    if plot_uncertainty:
-        lmp_set.lmp_sig_nom *= 1e3
-        lmp_set.plot_bounds(ax2)
-        lmp_set.lmp_sig_nom *= 1e-3
-    else:
-        ax2.plot(periods, np.array(lmp_values) * 1e3,
-                 label="LMP", linewidth=1.8,
-                 color="black")
-    custom_lmp_vals = [] if custom_lmp_vals is None else custom_lmp_vals
-    for val in custom_lmp_vals:
-        lmp_arr = np.array(val) * 1e3
-        ax2.plot(periods, lmp_arr, label="worst case", linewidth=1.8,
-                 color="green")
+    if plot_lmp:
+        ax2 = ax1.twinx()
+        ax2.grid(False)
+        ax2.set_ylabel("LMP Signal ($/MWh)", color="black")
+        if plot_uncertainty and lmp_set is not None:
+            lmp_set.lmp_sig_nom *= 1e3
+            lmp_set.plot_bounds(ax2)
+            lmp_set.lmp_sig_nom *= 1e-3
+        else:
+            ax2.plot(periods[:-1], np.array(lmp_values) * 1e3,
+                     label="LMP", linewidth=1.8,
+                     color="black")
+        custom_lmp_vals = [] if custom_lmp_vals is None else custom_lmp_vals
+        for val in custom_lmp_vals:
+            lmp_arr = np.array(val) * 1e3
+            ax2.plot(periods[:-1], lmp_arr, label="worst case", linewidth=1.8,
+                     color="green")
 
-    ax2.legend(bbox_to_anchor=(1, -0.15), loc="upper right", ncol=1)
+        ax2.legend(bbox_to_anchor=(1, -0.15), loc="upper right", ncol=1)
 
-    # get LMP axis bounds
-    lmp_bounds = lmp_set.bounds()
-    y_min = min(bound[0] for bound in lmp_bounds) * 1e3
-    y_max = max(bound[1] for bound in lmp_bounds) * 1e3
-
-    ax2.set_ylim([y_min, y_max])
+        # set LMP axis bounds
+        if lmp_bounds is None:
+            if lmp_set is not None:
+                lmp_bounds = lmp_set.bounds()
+                y_min = min(bound[0] for bound in lmp_bounds) * 1e3
+                y_max = max(bound[1] for bound in lmp_bounds) * 1e3
+                ax2.set_ylim([y_min, y_max])
+        else:
+            y_min = lmp_bounds[0]
+            y_max = lmp_bounds[1]
+            ax2.set_ylim([y_min, y_max])
 
     if filename is not None:
         plt.savefig(filename, bbox_inches="tight", dpi=300)
@@ -176,22 +381,58 @@ def plot_output_results(mp_model, lmp_set, plot_uncertainty=True,
     plt.close()
 
 
-def plot_results(model, lmp_set, custom_lmp_vals=None,
-                 plot_uncertainty=True, output_dir=None):
-    os.makedirs(output_dir, exist_ok=True)
-    plot_output_results(
+def plot_results(
+        mp_model,
+        lmp_set=None,
+        plot_lmp=True,
+        plot_uncertainty=True,
+        start=None,
+        stop=None,
+        highlight_active_periods=False,
+        custom_lmp_vals=None,
+        output_dir=None,
+        lmp_bounds=None,
+        ):
+    """
+    Plot model power output results
+    (wind production, battery-to-grid discharge,
+    and wind-to-grid power).
+
+    Arguments
+    ---------
+    Same as those used for `plot_soc_results`.
+    """
+    if output_dir is not None:
+        os.makedirs(output_dir, exist_ok=True)
+        pwr_filename = os.path.join(output_dir, "power_output.png")
+        soc_filename = os.path.join(output_dir, "soc.png")
+    else:
+        pwr_filename = None
+        soc_filename = None
+
+    plot_power_output_results(
         model,
-        lmp_set,
-        custom_lmp_vals=custom_lmp_vals,
-        filename=os.path.join(output_dir, "power_output.png"),
+        lmp_set=lmp_set,
+        plot_lmp=plot_lmp,
         plot_uncertainty=plot_uncertainty,
+        custom_lmp_vals=custom_lmp_vals,
+        filename=pwr_filename,
+        start=start,
+        stop=stop,
+        highlight_active_periods=highlight_active_periods,
+        lmp_bounds=lmp_bounds,
     )
     plot_soc_results(
         model,
-        lmp_set,
-        custom_lmp_vals=custom_lmp_vals,
-        filename=os.path.join(output_dir, "soc.png"),
+        lmp_set=lmp_set,
+        plot_lmp=plot_lmp,
         plot_uncertainty=plot_uncertainty,
+        custom_lmp_vals=custom_lmp_vals,
+        filename=soc_filename,
+        start=start,
+        stop=stop,
+        highlight_active_periods=highlight_active_periods,
+        lmp_bounds=lmp_bounds,
     )
 
 
@@ -422,6 +663,7 @@ def solve_rolling_horizon(
         control_length,
         num_steps,
         start,
+        output_dir=None,
         **solver_kwargs,
         ):
     """
@@ -491,6 +733,16 @@ def solve_rolling_horizon(
             )
         )
         print(model.current_time, res.problem.lower_bound, revenue)
+
+        if output_dir is not None:
+            lmp_bounds = (1e3 * min(lmp_signal) - 5, 1e3 * max(lmp_signal) + 5)
+            plot_results(
+                model,
+                highlight_active_periods=True,
+                output_dir=os.path.join(output_dir, f"step_{idx}"),
+                lmp_bounds=lmp_bounds,
+                start=0,
+            )
 
 
 def perform_incidence_analysis(model):
@@ -627,10 +879,13 @@ if __name__ == "__main__":
 
     plot_results(
         model,
-        hyster_lmp_set,
-        output_dir=os.path.join(base_dir, "deterministic"),
+        lmp_set=hyster_lmp_set,
         plot_uncertainty=False,
+        highlight_active_periods=True,
+        output_dir=os.path.join(base_dir, "deterministic"),
     )
+
+    pdb.set_trace()
 
     pyros_solver = pyo.SolverFactory("pyros")
     ro_res = pyros_solver.solve(
@@ -722,7 +977,7 @@ if __name__ == "__main__":
 
     plot_results(
         model,
-        hyster_lmp_set,
+        lmp_set=hyster_lmp_set,
         output_dir=os.path.join(base_dir, "ro_best"),
         plot_uncertainty=True,
     )
@@ -733,4 +988,11 @@ if __name__ == "__main__":
         )
     )
     print("best-case revenue", rev)
+    pdb.set_trace()
+
+    # now finally, the rolling horizon simulation
+    solve_rolling_horizon(
+        model, solver, lmp_signal_filename, 1, 14, 4000,
+        output_dir=os.path.join(base_dir, "rolling_horizon"),
+    )
     pdb.set_trace()

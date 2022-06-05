@@ -79,21 +79,23 @@ class LMPBoxSet():
         """Obtain corresponding PyROS BoxSet."""
         return uncertainty_sets.BoxSet(bounds=self.bounds())
 
-    def plot_bounds(self, ax, highlight_peak_effects=False, filename=None):
+    def plot_bounds(self, ax, highlight_peak_effects=False, filename=None,
+                    offset=0):
         """Plot LMP bounds against planning period."""
         bounds = self.bounds()
 
         # resolve bounds into lower and upper
+        periods = np.array(list(range(len(bounds)))) + offset
         lower_bds = np.array([bounds[idx][0] for idx in range(len(bounds))])
         upper_bds = np.array([bounds[idx][1] for idx in range(len(bounds))])
 
         color = "black"
 
         # generate the plots
-        ax.plot(upper_bds, "--", color="green", linewidth=1.0)
-        ax.plot(lower_bds, "--", color="green", label="bounds",
+        ax.plot(periods, upper_bds, "--", color="green", linewidth=1.0)
+        ax.plot(periods, lower_bds, "--", color="green", label="bounds",
                 linewidth=1.0)
-        ax.fill_between(range(len(lower_bds)), lower_bds, upper_bds,
+        ax.fill_between(periods, lower_bds, upper_bds,
                         color="green", alpha=0.1, label="uncertainty")
 
         # highlight peak effects if desired
@@ -106,7 +108,7 @@ class LMPBoxSet():
             for cond in [at_sunrise, at_sunset]:
                 peak_times = cond
                 # plot bounds and LMP signal
-                peak_hrs = times[peak_times]
+                peak_hrs = times[peak_times] + offset
                 ax.plot(peak_hrs, upper_bds[peak_times], "--", color="red",
                         linewidth=1.0)
                 ax.plot(peak_hrs, lower_bds[peak_times], "--", color="red",
@@ -116,7 +118,8 @@ class LMPBoxSet():
                                 color="red", alpha=0.1)
 
         # plot nominal LMP
-        ax.plot(self.lmp_sig_nom, color=color, label='nominal', linewidth=1.8)
+        ax.plot(periods, self.lmp_sig_nom, color=color, label='nominal',
+                linewidth=1.8)
 
         # labels
         # ax.set_ylabel('LMP signal ($/MWh)')
