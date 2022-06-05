@@ -706,6 +706,7 @@ def solve_rolling_horizon(
     # cannot control beyond prediction horizon
     prediction_length = len(model.get_active_process_blocks())
     assert prediction_length >= control_length
+    assert "load_solutions" not in solver_kwargs
 
     # obtain new LMP signal
     lmp_signal = get_lmp_data(
@@ -737,7 +738,21 @@ def solve_rolling_horizon(
                 advance_time(model, lmp_signal[lmp_start:lmp_stop])
 
         # solve pyomo model
-        res = solver.solve(model.pyomo_model, **solver_kwargs)
+        res = solver.solve(
+            model.pyomo_model,
+            load_solutions=False,
+            **solver_kwargs,
+        )
+
+        if pyo.check_optimal_termination(res):
+            model.pyomo_model.solutions.load_from(res)
+        else:
+            raise RuntimeError(
+                f"Model at step {idx} was not successfully solved"
+                f" to optimality. Solver results: {res.solver}"
+                "\nTerminating rolling horizon optimization."
+            )
+
         revenue = pyo.value(
             pyo.dot_product(
                 model.pyomo_model.LMP,
