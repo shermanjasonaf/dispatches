@@ -640,6 +640,12 @@ def advance_time(
     b.fs.battery.nameplate_energy.fix(battery_energy_capacity)
     b.periodic_constraints[0].deactivate()
 
+    # fix initial state of charge and throughput to values
+    # from previous period
+    b_init = model.get_active_process_blocks()[0]
+    b_init.fs.battery.initial_state_of_charge.fix()
+    b_init.fs.battery.initial_energy_throughput.fix()
+
     # update LMP signal and model objective
     lmp_sig = {
         t: pyo.value(model.pyomo_model.LMP[t])
@@ -650,6 +656,11 @@ def advance_time(
         for t in range(len(new_lmp_sig))
     })
     construct_profit_obj(model, lmp_sig)
+
+    # deactivate constraints in fixed variables
+    for con in pyomo_model.component_data_objects(pyo.Constraint, active=True):
+        if all(var.fixed for var in identify_variables(con.body)):
+            con.deactivate()
 
     # construct an updated uncertainty set (if constructor provided)
     if lmp_set_class is not None:
