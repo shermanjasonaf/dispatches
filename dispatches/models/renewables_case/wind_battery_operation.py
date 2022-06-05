@@ -604,8 +604,9 @@ def advance_time(
 
     Returns
     -------
-    An updated LMP uncertainty set, if a constructor is provided
-    through the `lmp_set_class` argument.
+    : LMPBoxSet
+        An updated LMP uncertainty set, if a constructor is provided
+        through the `lmp_set_class` argument.
     """
     assert len(new_lmp_sig) == len(model.get_active_process_blocks())
 
