@@ -735,13 +735,19 @@ def solve_rolling_horizon(
         print(model.current_time, res.problem.lower_bound, revenue)
 
         if output_dir is not None:
-            lmp_bounds = (1e3 * min(lmp_signal) - 5, 1e3 * max(lmp_signal) + 5)
+            start = 0
+            stop = prediction_length - 1
+            lmp_bounds = (
+                1e3 * min(lmp_signal[start:stop]) - 5,
+                1e3 * max(lmp_signal[start:stop]) + 5,
+            )
             plot_results(
                 model,
                 highlight_active_periods=True,
                 output_dir=os.path.join(output_dir, f"step_{idx}"),
                 lmp_bounds=lmp_bounds,
                 start=0,
+                stop=prediction_length - 1,
             )
 
 
@@ -992,7 +998,7 @@ if __name__ == "__main__":
 
     # now finally, the rolling horizon simulation
     solve_rolling_horizon(
-        model, solver, lmp_signal_filename, 1, 14, 4000,
+        model, solver, lmp_signal_filename, 1, horizon, start,
         output_dir=os.path.join(base_dir, "rolling_horizon"),
     )
     pdb.set_trace()
