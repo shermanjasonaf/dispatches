@@ -224,9 +224,13 @@ def _plot_lmp(ax, periods, lmp_values, lmp_set,
         lmp_set.plot_bounds(ax, offset=active_start)
         lmp_set.lmp_sig_nom *= 1e-3
     else:
-        ax.plot(periods, np.array(lmp_values) * 1e3,
-                label="LMP", linewidth=1.8,
-                color="black")
+        ax.plot(
+            periods[periods >= active_start],
+            np.array(lmp_values)[periods >= active_start] * 1e3,
+            label="LMP",
+            linewidth=1.8,
+            color="black",
+        )
     if periods[periods <= active_start].size > 0:
         alpha = 0.3 if highlight_active_periods else 1
         ax.plot(
