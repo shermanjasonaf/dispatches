@@ -961,6 +961,7 @@ if __name__ == "__main__":
     horizon = 24
     start = 4000
     solve_pyros = True
+    dr_order = 0
 
     logging.basicConfig(level=logging.INFO)
 
@@ -1022,7 +1023,7 @@ if __name__ == "__main__":
         global_solver=solver,
         backup_local_solvers=[gams_baron, couenne],
         backup_global_solvers=[gams_baron, couenne],
-        decision_rule_order=0,
+        decision_rule_order=dr_order,
         bypass_local_separation=True,
         objective_focus=pyros.ObjectiveType.worst_case,
         solve_master_globally=True,
@@ -1043,6 +1044,6 @@ if __name__ == "__main__":
         lmp_set_class=HysterLMPBoxSet,
         lmp_set_kwargs=lmp_set_params,
         solver_kwargs=pyros_kwargs,
-        output_dir=os.path.join(base_dir, "rolling_horizon_ro"),
+        output_dir=os.path.join(base_dir, f"rolling_horizon_ro_dr_{dr_order}"),
     )
     pdb.set_trace()
