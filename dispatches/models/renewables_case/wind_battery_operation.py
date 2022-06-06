@@ -896,6 +896,7 @@ def solve_rolling_horizon(
                 start=0,
                 stop=model.current_time + prediction_length - 1,
                 xmax=(num_steps - 1) * control_length + prediction_length,
+                plot_uncertainty=is_pyros,
             )
 
 
@@ -1008,8 +1009,15 @@ if __name__ == "__main__":
 
     # rolling horizon simulation of deterministic model
     solve_rolling_horizon(
-        model, solver, lmp_signal_filename, 1, horizon, start,
+        model,
+        solver,
+        lmp_signal_filename,
+        1,
+        horizon,
+        start,
         output_dir=os.path.join(base_dir, "rolling_horizon_deterministic"),
+        lmp_set_class=HysterLMPBoxSet,
+        lmp_set_kwargs=lmp_set_params,
     )
     pdb.set_trace()
 
