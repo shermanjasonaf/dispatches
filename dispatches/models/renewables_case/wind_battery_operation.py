@@ -45,6 +45,8 @@ def plot_soc_results(
         highlight_active_periods=False,
         custom_lmp_vals=None,
         lmp_bounds=None,
+        xmin=None,
+        xmax=None,
         ):
     """
     Plot battery state-of-charge values (in MWh).
@@ -93,6 +95,12 @@ def plot_soc_results(
         and smallest lower bound from the LMP uncertainty set
         are used for the axis bounds
         (if an uncertainty set is provided).
+    xmin : float, optional
+        Time axis (x-axis) lower bound. The default is `None`,
+        in which caset `start` is used.
+    xmax : float, optional
+        Time axis (x-axis) upper bound. The default is `None`,
+        in which case `stop` is used.
     """
     active_blks = mp_model.get_active_process_blocks()
 
@@ -100,8 +108,11 @@ def plot_soc_results(
     ax1.grid(False)
 
     # get model blocks of interest
-    start = model.current_time if start is None else start
-    stop = model.current_time + len(active_blks) - 1 if stop is None else stop
+    start = mp_model.current_time if start is None else start
+    stop = (
+        mp_model.current_time + len(active_blks) - 1
+        if stop is None else stop
+    )
 
     assert start >= 0
     assert stop < len(mp_model.pyomo_model.blocks)
@@ -110,7 +121,7 @@ def plot_soc_results(
         assert lmp_bounds[0] < lmp_bounds[1]
 
     periods = np.array(range(start, stop + 1), dtype=int)
-    active_start = model.current_time
+    active_start = mp_model.current_time
     blocks = list(
         blk.process
         for idx, blk in enumerate(mp_model.pyomo_model.blocks.values())
@@ -181,42 +192,69 @@ def plot_soc_results(
     if plot_lmp:
         ax2 = ax1.twinx()
         ax2.grid(False)
-        ax2.set_ylabel("LMP Signal ($/MWh)", color="black")
-        if plot_uncertainty and lmp_set is not None:
-            # plot LMP uncertainty set bounds.
-            # NOTE: the LMPs are scaled to MWh before plotting
-            #       since the values provided are in kWh
-            # TODO: enforce LMP units at model declaration
-            lmp_set.lmp_sig_nom *= 1e3
-            lmp_set.plot_bounds(ax2, offset=start)
-            lmp_set.lmp_sig_nom *= 1e-3
-        else:
-            ax2.plot(periods, np.array(lmp_values) * 1e3,
-                     label="LMP", linewidth=1.8,
-                     color="black")
-        custom_lmp_vals = [] if custom_lmp_vals is None else custom_lmp_vals
-        for val in custom_lmp_vals:
-            lmp_arr = np.array(val) * 1e3
-            ax2.plot(periods, lmp_arr, label="worst case", linewidth=1.8,
-                     color="green")
-        ax2.legend(bbox_to_anchor=(1, -0.15), loc="upper right", ncol=1)
+        _plot_lmp(ax2, periods, lmp_values, lmp_set, active_start,
+                  lmp_bounds=lmp_bounds, plot_uncertainty=plot_uncertainty,
+                  highlight_active_periods=highlight_active_periods,
+                  custom_lmp_vals=custom_lmp_vals)
 
-        # set LMP axis bounds
-        if lmp_bounds is None:
-            if lmp_set is not None:
-                lmp_bounds = lmp_set.bounds()
-                y_min = min(bound[0] for bound in lmp_bounds) * 1e3
-                y_max = max(bound[1] for bound in lmp_bounds) * 1e3
-                ax2.set_ylim([y_min, y_max])
-        else:
-            y_min = lmp_bounds[0]
-            y_max = lmp_bounds[1]
-            ax2.set_ylim([y_min, y_max])
+    # set time interval axis limits
+    xmin = start if xmin is None else xmin
+    xmax = stop if xmin is None else xmax
+    ax1.set_xlim([xmin, xmax])
 
     if filename is not None:
         plt.savefig(filename, bbox_inches="tight", dpi=300)
 
     plt.close()
+
+
+def _plot_lmp(ax, periods, lmp_values, lmp_set,
+              active_start, lmp_bounds=None, plot_uncertainty=True,
+              highlight_active_periods=True, custom_lmp_vals=None):
+    """
+    Plot LMP signal.
+    """
+    ax.set_ylabel("LMP Signal ($/MWh)", color="black")
+    if plot_uncertainty and lmp_set is not None:
+        # plot LMP uncertainty set bounds.
+        # NOTE: the LMPs are scaled to MWh before plotting
+        #       since the values provided are in kWh
+        # TODO: enforce LMP units at model declaration
+        lmp_set.lmp_sig_nom *= 1e3
+        lmp_set.plot_bounds(ax, offset=active_start)
+        lmp_set.lmp_sig_nom *= 1e-3
+    else:
+        ax.plot(periods, np.array(lmp_values) * 1e3,
+                label="LMP", linewidth=1.8,
+                color="black")
+    if periods[periods <= active_start].size > 0:
+        alpha = 0.3 if highlight_active_periods else 1
+        ax.plot(
+            periods[periods <= active_start],
+            np.array(lmp_values)[periods <= active_start] * 1e3,
+            label="LMP (prev)",
+            linewidth=1.8,
+            color="black",
+            alpha=alpha,
+        )
+    custom_lmp_vals = [] if custom_lmp_vals is None else custom_lmp_vals
+    for val in custom_lmp_vals:
+        lmp_arr = np.array(val) * 1e3
+        ax.plot(periods, lmp_arr, label="worst case", linewidth=1.8,
+                color="green")
+    ax.legend(bbox_to_anchor=(1, -0.15), loc="upper right", ncol=1)
+
+    # set LMP axis bounds
+    if lmp_bounds is None:
+        if lmp_set is not None:
+            lmp_bounds = lmp_set.bounds()
+            y_min = min(bound[0] for bound in lmp_bounds) * 1e3
+            y_max = max(bound[1] for bound in lmp_bounds) * 1e3
+            ax.set_ylim([y_min, y_max])
+    else:
+        y_min = lmp_bounds[0]
+        y_max = lmp_bounds[1]
+        ax.set_ylim([y_min, y_max])
 
 
 def plot_power_output_results(
@@ -230,6 +268,8 @@ def plot_power_output_results(
         highlight_active_periods=False,
         custom_lmp_vals=None,
         lmp_bounds=None,
+        xmin=None,
+        xmax=None,
         ):
     """
     Plot model power output results
@@ -246,8 +286,10 @@ def plot_power_output_results(
     ax1.grid(False)
 
     # get model blocks of interest
-    start = model.current_time if start is None else start
-    stop = model.current_time + len(active_blks) - 1 if stop is None else stop
+    start = mp_model.current_time if start is None else start
+    stop = (
+        mp_model.current_time + len(active_blks) - 1 if stop is None else stop
+    )
 
     assert start >= 0
     assert stop < len(mp_model.pyomo_model.blocks)
@@ -256,7 +298,7 @@ def plot_power_output_results(
         assert lmp_bounds[0] < lmp_bounds[1]
 
     periods = np.array(range(start, stop + 2))
-    active_start = model.current_time
+    active_start = mp_model.current_time
     blocks = list(
         blk.process
         for idx, blk in enumerate(mp_model.pyomo_model.blocks.values())
@@ -346,34 +388,15 @@ def plot_power_output_results(
     if plot_lmp:
         ax2 = ax1.twinx()
         ax2.grid(False)
-        ax2.set_ylabel("LMP Signal ($/MWh)", color="black")
-        if plot_uncertainty and lmp_set is not None:
-            lmp_set.lmp_sig_nom *= 1e3
-            lmp_set.plot_bounds(ax2)
-            lmp_set.lmp_sig_nom *= 1e-3
-        else:
-            ax2.plot(periods[:-1], np.array(lmp_values) * 1e3,
-                     label="LMP", linewidth=1.8,
-                     color="black")
-        custom_lmp_vals = [] if custom_lmp_vals is None else custom_lmp_vals
-        for val in custom_lmp_vals:
-            lmp_arr = np.array(val) * 1e3
-            ax2.plot(periods[:-1], lmp_arr, label="worst case", linewidth=1.8,
-                     color="green")
+        _plot_lmp(ax2, periods[:-1], lmp_values, lmp_set, active_start,
+                  lmp_bounds=lmp_bounds, plot_uncertainty=plot_uncertainty,
+                  highlight_active_periods=highlight_active_periods,
+                  custom_lmp_vals=custom_lmp_vals)
 
-        ax2.legend(bbox_to_anchor=(1, -0.15), loc="upper right", ncol=1)
-
-        # set LMP axis bounds
-        if lmp_bounds is None:
-            if lmp_set is not None:
-                lmp_bounds = lmp_set.bounds()
-                y_min = min(bound[0] for bound in lmp_bounds) * 1e3
-                y_max = max(bound[1] for bound in lmp_bounds) * 1e3
-                ax2.set_ylim([y_min, y_max])
-        else:
-            y_min = lmp_bounds[0]
-            y_max = lmp_bounds[1]
-            ax2.set_ylim([y_min, y_max])
+    # set time interval axis limits
+    xmin = start if xmin is None else xmin
+    xmax = stop + 1 if xmin is None else xmax
+    ax1.set_xlim([xmin, xmax])
 
     if filename is not None:
         plt.savefig(filename, bbox_inches="tight", dpi=300)
@@ -392,6 +415,8 @@ def plot_results(
         custom_lmp_vals=None,
         output_dir=None,
         lmp_bounds=None,
+        xmin=None,
+        xmax=None,
         ):
     """
     Plot model power output results
@@ -411,7 +436,7 @@ def plot_results(
         soc_filename = None
 
     plot_power_output_results(
-        model,
+        mp_model,
         lmp_set=lmp_set,
         plot_lmp=plot_lmp,
         plot_uncertainty=plot_uncertainty,
@@ -421,9 +446,11 @@ def plot_results(
         stop=stop,
         highlight_active_periods=highlight_active_periods,
         lmp_bounds=lmp_bounds,
+        xmin=xmin,
+        xmax=xmax,
     )
     plot_soc_results(
-        model,
+        mp_model,
         lmp_set=lmp_set,
         plot_lmp=plot_lmp,
         plot_uncertainty=plot_uncertainty,
@@ -433,6 +460,8 @@ def plot_results(
         stop=stop,
         highlight_active_periods=highlight_active_periods,
         lmp_bounds=lmp_bounds,
+        xmin=xmin,
+        xmax=xmax,
     )
 
 
@@ -659,7 +688,8 @@ def advance_time(
     construct_profit_obj(model, lmp_sig)
 
     # deactivate constraints in fixed variables
-    for con in pyomo_model.component_data_objects(pyo.Constraint, active=True):
+    m = model.pyomo_model
+    for con in m.component_data_objects(pyo.Constraint, active=True):
         if all(var.fixed for var in identify_variables(con.body)):
             con.deactivate()
 
@@ -676,17 +706,23 @@ def solve_rolling_horizon(
         num_steps,
         start,
         output_dir=None,
-        **solver_kwargs,
+        lmp_set_class=None,
+        lmp_set_kwargs=None,
+        solver_kwargs=None,
         ):
     """
-    Solve the deterministic wind-battery model on a rolling horizon.
+    Solve a multi-period wind-battery model on a rolling horizon.
 
     Parameters
     ----------
     model : MultiPeriodModel
         Model of interest.
     solver : pyomo SolverFactory object
-        Optimizer used to solve the model.
+        Optimizer used for the Pyomo model.
+        PyROS (`pyo.SolverFactory('pyros')`) may be provided
+        as a multi-stage RO solver, but in this case,
+        an uncertainty set class must be provided (through the
+        `lmp_set_class` argument) as well.
     lmp_signal_filename : path-like
         Path to LMP signal data file.
     control_length : int
@@ -700,13 +736,44 @@ def solve_rolling_horizon(
     start : int
         Starting index for the LMP signal extracted from the
         data file at the path specified by `lmp_signal_filename`.
+    output_dir : path-like, optional
+        Path to directory to which output plots produced for each
+        time step. The default is `None`, in which case no plots
+        are produced. If a path is provided, plots are generated,
+        and exported to this directory.
+    lmp_set_class : class, optional
+        Class to use for generating uncertainty in the LMP's.
+    lmp_set_kwargs : dict, optional
+        Keyword arguments to the LMP uncertainty set class's
+        constructor method.
     solver_kwargs : dict, optional
         Keyword arguments to the method `solver.solve()`.
     """
     # cannot control beyond prediction horizon
     prediction_length = len(model.get_active_process_blocks())
     assert prediction_length >= control_length
-    assert "load_solutions" not in solver_kwargs
+
+    solver_kwargs = dict() if solver_kwargs is None else solver_kwargs
+    lmp_set_kwargs = dict() if lmp_set_kwargs is None else lmp_set_kwargs
+
+    # solving RO model? if so, validate keyword args
+    is_pyros = isinstance(solver, type(pyo.SolverFactory("pyros")))
+    if is_pyros:
+        prereq_args = {"local_solver", "global_solver"}
+        antireq_args = {
+            "model",
+            "first_stage_variables",
+            "second_stage_variables",
+            "uncertain_params",
+            "uncertainty_set",
+        }
+        kwargs_set = set(solver_kwargs.keys())
+
+        assert prereq_args.issubset(kwargs_set)
+        assert all(arg not in kwargs_set for arg in antireq_args)
+        assert lmp_set_class is not None
+    else:
+        assert "load_solutions" not in solver_kwargs
 
     # obtain new LMP signal
     lmp_signal = get_lmp_data(
@@ -715,9 +782,44 @@ def solve_rolling_horizon(
         start=start,
     ) / 1e3
 
+    # get LMP axis bounds for plotting
+    if output_dir is not None:
+        if lmp_set_class is not None:
+            lmp_sets = list(
+                lmp_set_class(
+                    lmp_signal[idx:idx + prediction_length],
+                    **lmp_set_kwargs,
+                )
+                for idx in range(0, num_steps * control_length, control_length)
+            )
+            max_ubs = list()
+            min_lbs = list()
+            for price_set in lmp_sets:
+                lower_bounds = [bd[0] for bd in price_set.bounds()]
+                upper_bounds = [bd[1] for bd in price_set.bounds()]
+                max_ubs.append(max(upper_bounds))
+                min_lbs.append(min(lower_bounds))
+            lmp_bounds = (
+                1e3 * min(min_lbs) - 5,
+                1e3 * max(max_ubs) + 5,
+            )
+        else:
+            lmp_bounds = (
+                1e3 * min(lmp_signal) - 5,
+                1e3 * max(lmp_signal) + 5,
+            )
+
     lmp_start = 0
     for idx in range(num_steps):
         if idx == 0:
+            init_lmp_sig = lmp_signal[:prediction_length]
+
+            # construct uncertainty set (if constructor provided)
+            if lmp_set_class is not None:
+                lmp_set = lmp_set_class(init_lmp_sig, **lmp_set_kwargs)
+            else:
+                lmp_set = None
+
             # set up extended LMP signal.
             # this changes the LMP values for the currently
             # active process blocks
@@ -726,23 +828,41 @@ def solve_rolling_horizon(
                 for t in range(model.current_time + 1)
             }
             lmp_sig.update({
-                t + model.current_time: lmp_signal[t]
-                for t in range(prediction_length)
+                t + model.current_time: val
+                for t, val in enumerate(init_lmp_sig)
             })
             construct_profit_obj(model, lmp_sig)
         else:
             # advance the model in time, extend LMP signal
+            # and update the uncertainty set
             for step in range(control_length):
                 lmp_start += 1
                 lmp_stop = lmp_start + prediction_length
-                advance_time(model, lmp_signal[lmp_start:lmp_stop])
+                lmp_set = advance_time(
+                    model,
+                    lmp_signal[lmp_start:lmp_stop],
+                    lmp_set_class=lmp_set_class,
+                    lmp_set_class_params=lmp_set_kwargs,
+                )
 
-        # solve pyomo model
-        res = solver.solve(
-            model.pyomo_model,
-            load_solutions=False,
-            **solver_kwargs,
-        )
+        # solve the model
+        if is_pyros:
+            first_stage_vars, second_stage_vars = get_dof_vars(model)
+            uncertain_params = get_uncertain_params(model)
+            res = solver.solve(
+                model.pyomo_model,
+                first_stage_vars,
+                second_stage_vars,
+                uncertain_params,
+                lmp_set.pyros_set(),
+                **solver_kwargs,
+            )
+        else:
+            res = solver.solve(
+                model.pyomo_model,
+                load_solutions=False,
+                **solver_kwargs,
+            )
 
         if pyo.check_optimal_termination(res):
             model.pyomo_model.solutions.load_from(res)
@@ -763,18 +883,15 @@ def solve_rolling_horizon(
 
         if output_dir is not None:
             start = 0
-            stop = prediction_length - 1
-            lmp_bounds = (
-                1e3 * min(lmp_signal[start:stop]) - 5,
-                1e3 * max(lmp_signal[start:stop]) + 5,
-            )
             plot_results(
                 model,
                 highlight_active_periods=True,
+                lmp_set=lmp_set,
                 output_dir=os.path.join(output_dir, f"step_{idx}"),
                 lmp_bounds=lmp_bounds,
                 start=0,
-                stop=prediction_length - 1,
+                stop=model.current_time + prediction_length - 1,
+                xmax=(num_steps - 1) * control_length + prediction_length,
             )
 
 
@@ -807,7 +924,7 @@ def perform_incidence_analysis(model):
         and con.active
     )
     all_vars = list(
-        var for var in pyomo_model.component_data_objects(pyo.Var)
+        var for var in m.component_data_objects(pyo.Var)
         if not var.fixed
     )
 
@@ -828,7 +945,7 @@ def perform_incidence_analysis(model):
         constraints=list(eqns),
     )
     print("Maximum matching length", len(matching))
-    nlp = PyomoNLP(pyomo_model)
+    nlp = PyomoNLP(m)
     nlp.n_primals()
     jac = nlp.extract_submatrix_jacobian(list(state_vars), list(eqns))
     # splu(jac.tocsc())
@@ -837,7 +954,7 @@ def perform_incidence_analysis(model):
 
 
 if __name__ == "__main__":
-    horizon = 14
+    horizon = 24
     start = 4000
     solve_pyros = True
 
@@ -874,14 +991,8 @@ if __name__ == "__main__":
         start=start,
     ) / 1e3
 
-    # construct container for uncertainty set
-    hyster_lmp_set = HysterLMPBoxSet(lmp_signal, **lmp_set_params)
-
     # create model, and obtain degree-of-freedom partitioning
-    model = create_two_stg_wind_battery_model(hyster_lmp_set.lmp_sig_nom)
-    first_stage_vars, second_stage_vars = get_dof_vars(model)
-    uncertain_params = get_uncertain_params(model)
-    pyomo_model = model.pyomo_model
+    model = create_two_stg_wind_battery_model(lmp_signal[:horizon])
 
     # set up solvers
     solver = pyo.SolverFactory("gurobi")
@@ -890,48 +1001,24 @@ if __name__ == "__main__":
     gams_baron.options["solver"] = "baron"
     couenne = pyo.SolverFactory("couenne")
 
-    # solve deterministic model
-    res = solver.solve(pyomo_model, tee=True)
-
-    max_lmps = [bd[1] for bd in hyster_lmp_set.bounds()]
-    min_lmps = [bd[0] for bd in hyster_lmp_set.bounds()]
-    nom_lmps = hyster_lmp_set.lmp_sig_nom
-
-    # evaluate objective value of deterministic solution in event
-    # of nominal, max, and min LMP's
-    for sig in [max_lmps, min_lmps, nom_lmps]:
-        for t, val in enumerate(sig):
-            pyomo_model.LMP[t].set_value(val)
-        print(
-            "Revenue",
-            pyo.value(sum(
-                pyomo_model.LMP[t] * pyomo_model.TotalPowerOutput[t]
-                for t in pyomo_model.Horizon
-            ))
-        )
-
-    plot_results(
-        model,
-        lmp_set=hyster_lmp_set,
-        plot_uncertainty=False,
-        highlight_active_periods=True,
-        output_dir=os.path.join(base_dir, "deterministic"),
+    # rolling horizon simulation of deterministic model
+    solve_rolling_horizon(
+        model, solver, lmp_signal_filename, 1, horizon, start,
+        output_dir=os.path.join(base_dir, "rolling_horizon_deterministic"),
     )
-
     pdb.set_trace()
 
+    # create model
+    mdl = create_two_stg_wind_battery_model(lmp_signal[:horizon])
+
+    # set up PyROS solver and solver options
     pyros_solver = pyo.SolverFactory("pyros")
-    ro_res = pyros_solver.solve(
-        pyomo_model,
-        first_stage_vars,
-        second_stage_vars,
-        uncertain_params,
-        hyster_lmp_set.pyros_set(),
-        solver,
-        solver,
+    pyros_kwargs = dict(
+        local_solver=solver,
+        global_solver=solver,
         backup_local_solvers=[gams_baron, couenne],
         backup_global_solvers=[gams_baron, couenne],
-        decision_rule_order=1,
+        decision_rule_order=0,
         bypass_local_separation=True,
         objective_focus=pyros.ObjectiveType.worst_case,
         solve_master_globally=True,
@@ -941,91 +1028,17 @@ if __name__ == "__main__":
         subproblem_file_directory=os.path.join(base_dir, "pyros_sublogs"),
     )
 
-    for sig in [max_lmps, min_lmps, nom_lmps]:
-        for t, val in enumerate(sig):
-            pyomo_model.LMP[t].set_value(val)
-        print(
-            "Revenue",
-            pyo.value(sum(
-                pyomo_model.LMP[t] * pyomo_model.TotalPowerOutput[t]
-                for t in pyomo_model.Horizon
-            ))
-        )
-
-    for idx, val in pyomo_model.LMP.items():
-        val.set_value(hyster_lmp_set.bounds()[idx][0])
-    wc_rev = pyo.value(
-        sum(
-            pyomo_model.LMP[t] * pyomo_model.TotalPowerOutput[t]
-            for t in pyomo_model.Horizon
-        )
-    )
-    print("worst-case revenue", wc_rev)
-    print(
-        "final revenue (should be same)",
-        ro_res.solver.final_objective_value + pyo.value(
-            sum(
-                pyomo_model.OperationCost[t]
-                for t in pyomo_model.Horizon
-            )
-        )
-    )
-
-    for idx, val in pyomo_model.LMP.items():
-        val.set_value(hyster_lmp_set.lmp_sig_nom[idx])
-
-    # plot worst-case solution
-    plot_results(
-        model,
-        hyster_lmp_set,
-        custom_lmp_vals=[[bound[0] for bound in hyster_lmp_set.bounds()]],
-        output_dir=os.path.join(base_dir, "ro"),
-        plot_uncertainty=True,
-    )
-    ro_vars = [pyo.value(var) for var in first_stage_vars]
-
-    for var in second_stage_vars:
-        var.set_value(ro_res.solver.nom_ssv_vals[var.name])
-
-    plot_results(
-        model,
-        hyster_lmp_set,
-        output_dir=os.path.join(base_dir, "ro_nominal"),
-        plot_uncertainty=True,
-    )
-    ro_nom_vars = [pyo.value(var) for var in first_stage_vars]
-
-    nom_rev = pyo.value(
-        sum(
-            pyomo_model.LMP[t] * pyomo_model.TotalPowerOutput[t]
-            for t in pyomo_model.Horizon
-        )
-    )
-    print("nominal revenue", nom_rev)
-
-    for var in second_stage_vars:
-        var.set_value(ro_res.solver.best_case_ssv_vals[var.name])
-    for idx, val in pyomo_model.LMP.items():
-        val.set_value(hyster_lmp_set.bounds()[idx][1])
-
-    plot_results(
-        model,
-        lmp_set=hyster_lmp_set,
-        output_dir=os.path.join(base_dir, "ro_best"),
-        plot_uncertainty=True,
-    )
-    rev = pyo.value(
-        sum(
-            pyomo_model.LMP[t] * pyomo_model.TotalPowerOutput[t]
-            for t in pyomo_model.Horizon
-        )
-    )
-    print("best-case revenue", rev)
-    pdb.set_trace()
-
-    # now finally, the rolling horizon simulation
+    # rolling horizon simulation of RO model
     solve_rolling_horizon(
-        model, solver, lmp_signal_filename, 1, horizon, start,
-        output_dir=os.path.join(base_dir, "rolling_horizon"),
+        mdl,
+        pyros_solver,
+        lmp_signal_filename,
+        1,
+        horizon,
+        start,
+        lmp_set_class=HysterLMPBoxSet,
+        lmp_set_kwargs=lmp_set_params,
+        solver_kwargs=pyros_kwargs,
+        output_dir=os.path.join(base_dir, "rolling_horizon_ro"),
     )
     pdb.set_trace()
