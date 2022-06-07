@@ -87,8 +87,10 @@ def plot_soc_results(
         these values are added to the plot only if `plot_lmp`.
         is set to `True`. The default is `None`.
         If a dictionary is provided, then the keys are the plot legend
-        labels, the values are array-like objects whose entries are
-        the LMP signal values (in $/MWh).
+        labels, and the values are dictionaries whose:
+        - keys are integers denoting periods for which to plot the LMPs
+        - values are floats of the LMPs ($/MWh) for the corresponding
+          periods.
     lmp_bounds : tuple, optional
         A 2-tuple of bounds to be used for the LMP signal plot axis.
         The default is `None`, in which case the greatest upper bound
@@ -242,11 +244,16 @@ def _plot_lmp(ax, periods, lmp_values, lmp_set,
             color="black",
             alpha=alpha,
         )
-    custom_lmp_vals = [] if custom_lmp_vals is None else custom_lmp_vals
-    for val in custom_lmp_vals:
-        lmp_arr = np.array(val)
-        ax.plot(periods, lmp_arr, label="worst case", linewidth=1.8,
+
+    # plot custom LMP values
+    custom_lmp_vals = {} if custom_lmp_vals is None else custom_lmp_vals
+    for lmp_label, lmp_dict in custom_lmp_vals.items():
+        per_arr = np.array(list(lmp_dict.keys()))
+        assert np.all(per_arr == np.arange(per_arr[0], per_arr[-1] + 1))
+        lmp_arr = np.array(list(lmp_dict.values()))
+        ax.plot(per_arr, lmp_arr, label=lmp_label, linewidth=1.8,
                 color="green")
+
     ax.legend(bbox_to_anchor=(1, -0.15), loc="upper right", ncol=1)
 
     # set LMP axis bounds
@@ -983,6 +990,26 @@ def solve_rolling_horizon(
         print(f"{'accumulated':13s}{acc_val_str}")
 
         if output_dir is not None:
+            # obtain worst-case LMP, plot as 'custom' LMP signal.
+            # this is only provided in the event that PyROS is used
+            worst_case_lmp = getattr(
+                res.solver,
+                "worst_case_param_realization",
+                None,
+            )
+            if worst_case_lmp is not None:
+                active_periods = range(
+                    model.current_time, model.current_time + prediction_length
+                )
+                custom_lmp_vals = {
+                    "worst case": {
+                        per: val
+                        for per, val in zip(active_periods, worst_case_lmp)
+                    }
+                }
+            else:
+                custom_lmp_vals = None
+
             start = 0
             plot_results(
                 model,
@@ -994,6 +1021,7 @@ def solve_rolling_horizon(
                 stop=model.current_time + prediction_length - 1,
                 xmax=(num_steps - 1) * control_length + prediction_length,
                 plot_uncertainty=is_pyros,
+                custom_lmp_vals=custom_lmp_vals,
             )
 
 
