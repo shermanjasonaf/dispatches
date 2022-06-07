@@ -220,13 +220,11 @@ def _plot_lmp(ax, periods, lmp_values, lmp_set,
         # NOTE: the LMPs are scaled to MWh before plotting
         #       since the values provided are in kWh
         # TODO: enforce LMP units at model declaration
-        lmp_set.lmp_sig_nom *= 1e3
         lmp_set.plot_bounds(ax, offset=active_start)
-        lmp_set.lmp_sig_nom *= 1e-3
     else:
         ax.plot(
             periods[periods >= active_start],
-            np.array(lmp_values)[periods >= active_start] * 1e3,
+            np.array(lmp_values)[periods >= active_start],
             label="LMP",
             linewidth=1.8,
             color="black",
@@ -235,7 +233,7 @@ def _plot_lmp(ax, periods, lmp_values, lmp_set,
         alpha = 0.3 if highlight_active_periods else 1
         ax.plot(
             periods[periods <= active_start],
-            np.array(lmp_values)[periods <= active_start] * 1e3,
+            np.array(lmp_values)[periods <= active_start],
             label="LMP (prev)",
             linewidth=1.8,
             color="black",
@@ -243,7 +241,7 @@ def _plot_lmp(ax, periods, lmp_values, lmp_set,
         )
     custom_lmp_vals = [] if custom_lmp_vals is None else custom_lmp_vals
     for val in custom_lmp_vals:
-        lmp_arr = np.array(val) * 1e3
+        lmp_arr = np.array(val)
         ax.plot(periods, lmp_arr, label="worst case", linewidth=1.8,
                 color="green")
     ax.legend(bbox_to_anchor=(1, -0.15), loc="upper right", ncol=1)
@@ -252,8 +250,8 @@ def _plot_lmp(ax, periods, lmp_values, lmp_set,
     if lmp_bounds is None:
         if lmp_set is not None:
             lmp_bounds = lmp_set.bounds()
-            y_min = min(bound[0] for bound in lmp_bounds) * 1e3
-            y_max = max(bound[1] for bound in lmp_bounds) * 1e3
+            y_min = min(bound[0] for bound in lmp_bounds)
+            y_max = max(bound[1] for bound in lmp_bounds)
             ax.set_ylim([y_min, y_max])
     else:
         y_min = lmp_bounds[0]
@@ -488,9 +486,9 @@ def construct_profit_obj(model, lmp_signal):
 
     # reconstruct objective
     attrs_to_del = [
-        "MaxProfitObj",
-        "TotalPowerOutput",
-        "OperationCost",
+        "profit_obj",
+        "total_power_output",
+        "operating_cost",
         "Horizon",
         "LMP",
     ]
@@ -500,18 +498,7 @@ def construct_profit_obj(model, lmp_signal):
 
     pyomo_model.Horizon = pyo.Set(initialize=range(len(lmp_signal)))
 
-    # power output in MW
-    pyomo_model.TotalPowerOutput = pyo.Expression(pyomo_model.Horizon)
-
-    # Operation costs in $
-    pyomo_model.OperationCost = pyo.Expression(pyomo_model.Horizon)
-
-    for t, blk in pyomo_model.blocks.items():
-        b = blk.process
-        pyomo_model.TotalPowerOutput[t] = (
-            b.fs.splitter.grid_elec[0] + b.fs.battery.elec_out[0]
-        ) * 1e-3
-        pyomo_model.OperationCost[t] = b.fs.windpower.op_total_cost
+    from pyomo.environ import units as u
 
     # add LMPs
     pyomo_model.LMP = pyo.Param(
@@ -519,12 +506,27 @@ def construct_profit_obj(model, lmp_signal):
         initialize=lmp_signal,
         mutable=True,
         doc="Locational marginal prices, $/kWh",
-        units=1/pyo.units.kWh,
+        units=1/pyo.units.MWh,
     )
 
+    @pyomo_model.Expression(pyomo_model.Horizon,
+                            doc="Total power output to grid, MW")
+    def total_power_output(m, t):
+        b = m.blocks[t].process
+        return u.convert(
+            b.fs.splitter.grid_elec[0] + b.fs.battery.elec_out[0],
+            u.MW,
+        )
+
+    @pyomo_model.Expression(pyomo_model.Horizon,
+                            doc="Total operating cost, $/hr")
+    def operating_cost(m, t):
+        b = m.blocks[t].process
+        return b.fs.windpower.op_total_cost / u.kW / u.h
+
     @pyomo_model.Objective(doc="Total profit ($/hr)", sense=pyo.maximize)
-    def MaxProfitObj(m):
-        return sum(m.LMP[t] * m.TotalPowerOutput[t] - m.OperationCost[t]
+    def profit_obj(m):
+        return sum(m.LMP[t] * m.total_power_output[t] - m.operating_cost[t]
                    for t in m.Horizon)
 
 
@@ -558,6 +560,80 @@ def get_uncertain_params(model):
     return list(
         val for t, val in model.pyomo_model.LMP.items() if t >= start_time
     )
+
+
+def evaluate_objective(
+        mp_model,
+        start=None,
+        stop=None,
+        lmp_signal=None,
+        ):
+    """
+    Evaluate model objective.
+
+    Parameters
+    ----------
+    mp_model : MultiPeriodModel
+        Wind-battery model of interest.
+    start : int, optional
+        Index of first block to include from the list
+        `list(model.pyomo_model.blocks.values())`.
+        The default is `None`, in which case the index
+        of the first active process block is used.
+    stop : int, optional
+        Index of last block to include block from the list
+        `list(model.pyomo_model.blocks.values())`.
+        The default is `None`, in which case
+        the index of the last active process block is used.
+    lmp_signal : array-like, optional
+        LMP values ($/kWh) against which to evaluate the
+        objective. The default is `None`, in which case the
+        values are taken from `model.pyomo_model.LMP`.
+        If an array is provided, then the array must contain
+        `stop - start` entries.
+
+    Returns
+    -------
+    : tuple
+        A 3-tuple consisting of the total revenue, operating
+        cost, and profit (revenue - cost), in that order, in
+        $/hr.
+    """
+    start = mp_model.current_time if start is None else start
+    stop = (
+        start + len(list(mp_model.get_active_process_blocks()))
+        if stop is None else stop
+    )
+    assert start >= 0
+    assert stop <= len(mp_model.pyomo_model.blocks)
+    assert start <= stop
+
+    blocks = list(
+        blk.process
+        for idx, blk in enumerate(mp_model.pyomo_model.blocks.values())
+        if idx >= start and idx <= stop
+    )
+
+    if lmp_signal is None:
+        lmp_signal = list(
+            pyo.value(lmp)
+            for lmp in
+            list(mp_model.pyomo_model.LMP.values())[start:stop + 1]
+        )
+
+    assert len(lmp_signal) == len(blocks)
+
+    revenue = 0
+    cost = 0
+    for lmp_val, pblk in zip(lmp_signal, blocks):
+        total_power_out = pyo.units.convert(
+            pblk.fs.battery.elec_out[0] + pblk.fs.splitter.grid_elec[0],
+            pyo.units.MW,
+        )
+        revenue += pyo.value(total_power_out * lmp_val)
+        cost += pyo.value(pblk.fs.windpower.op_total_cost)
+
+    return (revenue, cost, revenue - cost)
 
 
 def create_two_stg_wind_battery_model(lmp_signal):
@@ -784,7 +860,7 @@ def solve_rolling_horizon(
         lmp_signal_filename,
         (num_steps - 1) * control_length + prediction_length,
         start=start,
-    ) / 1e3
+    )
 
     # get LMP axis bounds for plotting
     if output_dir is not None:
@@ -804,13 +880,13 @@ def solve_rolling_horizon(
                 max_ubs.append(max(upper_bounds))
                 min_lbs.append(min(lower_bounds))
             lmp_bounds = (
-                1e3 * min(min_lbs) - 5,
-                1e3 * max(max_ubs) + 5,
+                min(min_lbs) - 5,
+                max(max_ubs) + 5,
             )
         else:
             lmp_bounds = (
-                1e3 * min(lmp_signal) - 5,
-                1e3 * max(lmp_signal) + 5,
+                min(lmp_signal) - 5,
+                max(lmp_signal) + 5,
             )
 
     lmp_start = 0
@@ -877,13 +953,26 @@ def solve_rolling_horizon(
                 "\nTerminating rolling horizon optimization."
             )
 
-        revenue = pyo.value(
-            pyo.dot_product(
-                model.pyomo_model.LMP,
-                model.pyomo_model.TotalPowerOutput,
-            )
+        controlled_periods = list(
+            range(idx * control_length, idx + 1 * control_length),
         )
-        print(model.current_time, res.problem.lower_bound, revenue)
+        print("-" * 80)
+        print(f"Step {idx} (decision for periods {controlled_periods})")
+        projected_obj_tuple = evaluate_objective(
+            model,
+            start=0,
+            stop=num_steps * control_length - 1,
+        )
+        accumulated_obj_tuple = evaluate_objective(
+            model,
+            start=0,
+            stop=model.current_time,
+        )
+        print(f"{'':13s}{'revenue':10s}{'cost':10s}{'profit':10s}")
+        proj_val_str = "".join(f"{val:<10.2f}" for val in projected_obj_tuple)
+        acc_val_str = "".join(f"{val:<10.2f}" for val in accumulated_obj_tuple)
+        print(f"{'projected':13s}{proj_val_str}")
+        print(f"{'accumulated':13s}{acc_val_str}")
 
         if output_dir is not None:
             start = 0
@@ -959,7 +1048,7 @@ def perform_incidence_analysis(model):
 
 
 if __name__ == "__main__":
-    horizon = 24
+    horizon = 14
     start = 4000
     solve_pyros = True
     dr_order = 0
@@ -995,7 +1084,7 @@ if __name__ == "__main__":
         lmp_signal_filename,
         n_time_points,
         start=start,
-    ) / 1e3
+    )
 
     # create model, and obtain degree-of-freedom partitioning
     model = create_two_stg_wind_battery_model(lmp_signal[:horizon])
