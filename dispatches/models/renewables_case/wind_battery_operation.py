@@ -146,18 +146,17 @@ def plot_soc_results(
 
     # plot results for active periods
     if periods[periods >= active_start].size > 0:
-        active_qual = " (active)" if highlight_active_periods else ""
         ax1.plot(
             periods[periods >= active_start],
             np.array(charges)[periods >= active_start] / 1e3,
-            label="state of charge" + active_qual,
+            label="state of charge",
             linewidth=1.8,
             color="blue"
         )
         ax1.plot(
             periods[periods >= active_start],
             np.array(charge_bounds)[periods >= active_start] / 1e3,
-            label="charging limit" + active_qual,
+            label="charging limit",
             linewidth=1.8,
             color="red",
             linestyle="dashed",
@@ -169,7 +168,9 @@ def plot_soc_results(
         ax1.plot(
             periods[periods <= active_start],
             np.array(charges)[periods <= active_start] / 1e3,
-            label="state of charge" if highlight_active_periods else None,
+            label=(
+                "state of charge (prev)" if highlight_active_periods else None
+            ),
             linewidth=1.8,
             color="blue",
             alpha=alpha,
@@ -177,7 +178,9 @@ def plot_soc_results(
         ax1.plot(
             periods[periods <= active_start],
             np.array(charge_bounds)[periods <= active_start] / 1e3,
-            label="charging limit" if highlight_active_periods else None,
+            label=(
+                "charging limit (prev)" if highlight_active_periods else None
+            ),
             linewidth=1.8,
             color="red",
             linestyle="dashed",
@@ -324,11 +327,10 @@ def plot_power_output_results(
     wind_outputs.append(wind_outputs[-1])
 
     if periods[periods >= active_start].size > 0:
-        active_qual = " (active)" if highlight_active_periods else ""
         ax1.step(
             periods[periods >= active_start],
             np.array(grid_elecs)[periods >= active_start] / 1e3,
-            label="wind-to-grid" + active_qual,
+            label="wind-to-grid",
             where="post",
             linewidth=1.8,
             color="red",
@@ -336,7 +338,7 @@ def plot_power_output_results(
         ax1.step(
             periods[periods >= active_start],
             np.array(battery_elecs)[periods >= active_start] / 1e3,
-            label="battery-to-grid" + active_qual,
+            label="battery-to-grid",
             linewidth=1.8,
             where="post",
             color="blue",
@@ -345,7 +347,7 @@ def plot_power_output_results(
             periods[periods >= active_start],
             np.array(wind_outputs)[periods >= active_start] / 1e3,
             where="post",
-            label="wind production" + active_qual,
+            label="wind production",
             linewidth=1.8,
             color="purple",
             linestyle="dashed",
@@ -356,7 +358,9 @@ def plot_power_output_results(
         ax1.step(
             periods[periods <= active_start],
             np.array(grid_elecs)[periods <= active_start] / 1e3,
-            label="wind-to-grid" if highlight_active_periods else None,
+            label=(
+                "wind-to-grid (prev)" if highlight_active_periods else None
+            ),
             where="post",
             linewidth=1.8,
             color="red",
@@ -365,7 +369,9 @@ def plot_power_output_results(
         ax1.step(
             periods[periods <= active_start],
             np.array(battery_elecs)[periods <= active_start] / 1e3,
-            label="battery-to-grid" if highlight_active_periods else None,
+            label=(
+                "battery-to-grid (prev)" if highlight_active_periods else None
+            ),
             linewidth=1.8,
             where="post",
             color="blue",
@@ -375,7 +381,9 @@ def plot_power_output_results(
             periods[periods <= active_start],
             np.array(wind_outputs)[periods <= active_start] / 1e3,
             where="post",
-            label="wind production" if highlight_active_periods else None,
+            label=(
+                "wind production (prev)" if highlight_active_periods else None
+            ),
             linewidth=1.8,
             color="purple",
             linestyle="dashed",
