@@ -229,7 +229,7 @@ def _plot_lmp(ax, periods, lmp_values, lmp_set,
             linewidth=1.8,
             color="black",
         )
-    if periods[periods <= active_start].size > 0:
+    if periods[periods < active_start].size > 0:
         alpha = 0.3 if highlight_active_periods else 1
         ax.plot(
             periods[periods <= active_start],
