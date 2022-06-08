@@ -804,6 +804,8 @@ def solve_rolling_horizon(
         lmp_set_class=None,
         lmp_set_kwargs=None,
         solver_kwargs=None,
+        charging_eta=None,
+        discharging_eta=None,
         ):
     """
     Solve a multi-period wind-battery model on a rolling horizon.
@@ -843,6 +845,14 @@ def solve_rolling_horizon(
         constructor method.
     solver_kwargs : dict, optional
         Keyword arguments to the method `solver.solve()`.
+    charging_eta : float, optional
+        Battery charging efficiency. Default is `None`,
+        in which case the values already present in the model are
+        used.
+    discharging_eta : float, optional
+        Battery discharging efficiency. Default is `None`,
+        in which case the values already present in the model are
+        used.
     """
     # cannot control beyond prediction horizon
     prediction_length = len(model.get_active_process_blocks())
@@ -850,6 +860,12 @@ def solve_rolling_horizon(
 
     solver_kwargs = dict() if solver_kwargs is None else solver_kwargs
     lmp_set_kwargs = dict() if lmp_set_kwargs is None else lmp_set_kwargs
+
+    # validate battery charging and discharging efficiencies
+    if charging_eta is not None:
+        assert charging_eta > 0 and charging_eta <= 1
+    if discharging_eta is not None:
+        assert discharging_eta > 0 and discharging_eta <= 1
 
     # solving RO model? if so, validate keyword args
     is_pyros = isinstance(solver, type(pyo.SolverFactory("pyros")))
@@ -906,6 +922,16 @@ def solve_rolling_horizon(
 
     lmp_start = 0
     for idx in range(num_steps):
+        # set battery charging and discharging efficiencies
+        # for the active process blocks
+        for blk in model.get_active_process_blocks():
+            if charging_eta is not None:
+                blk.fs.battery.charging_eta.set_value(charging_eta)
+            if discharging_eta is not None:
+                blk.fs.battery.discharging_eta.set_value(
+                    discharging_eta
+                )
+
         if idx == 0:
             init_lmp_sig = lmp_signal[:prediction_length]
 
@@ -1088,6 +1114,7 @@ if __name__ == "__main__":
     start = 4000
     solve_pyros = True
     dr_order = 0
+    charging_eff = 0.95
 
     logging.basicConfig(level=logging.INFO)
 
@@ -1143,6 +1170,8 @@ if __name__ == "__main__":
         output_dir=os.path.join(base_dir, "rolling_horizon_deterministic"),
         lmp_set_class=HysterLMPBoxSet,
         lmp_set_kwargs=lmp_set_params,
+        charging_eta=charging_eff,
+        discharging_eta=charging_eff,
     )
     pdb.set_trace()
 
@@ -1178,5 +1207,7 @@ if __name__ == "__main__":
         lmp_set_kwargs=lmp_set_params,
         solver_kwargs=pyros_kwargs,
         output_dir=os.path.join(base_dir, f"rolling_horizon_ro_dr_{dr_order}"),
+        charging_eta=charging_eff,
+        discharging_eta=charging_eff,
     )
     pdb.set_trace()
