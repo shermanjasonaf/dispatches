@@ -1114,7 +1114,7 @@ if __name__ == "__main__":
     start = 4000
     solve_pyros = True
     dr_order = 0
-    charging_eff = 0.95
+    charging_eff = 0.98
 
     logging.basicConfig(level=logging.INFO)
 
