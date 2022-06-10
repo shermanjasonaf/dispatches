@@ -541,8 +541,13 @@ def construct_profit_obj(model, lmp_signal):
 
     @pyomo_model.Objective(doc="Total profit ($/hr)", sense=pyo.maximize)
     def profit_obj(m):
-        return sum(m.LMP[t] * m.total_power_output[t] - m.operating_cost[t]
-                   for t in m.Horizon)
+        profit = 0
+        for t, blk in pyomo_model.blocks.items():
+            dt = blk.process.fs.battery.dt
+            revenue = m.LMP[t] * m.total_power_output[t]
+            cost = m.operating_cost[t]
+            profit += (revenue - cost) * dt
+        return profit
 
 
 def get_dof_vars(model):
