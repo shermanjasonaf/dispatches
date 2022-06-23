@@ -572,14 +572,21 @@ def get_dof_vars(model):
     return first_stage_vars, second_stage_vars
 
 
-def get_uncertain_params(model):
+def get_uncertain_params(model, lmp_set, include_fixed_dims=True):
     """
     Obtain uncertain parameters for all active model blocks.
+    Optionally, include dimensions which are implicitly 'fixed'
+    by the uncertainty set parameter bounds.
     """
     start_time = model.current_time
-    return list(
+    lmp_params = list(
         val for t, val in model.pyomo_model.LMP.items() if t >= start_time
     )
+    uncertain_params = lmp_set.get_uncertain_params(
+        lmp_params,
+        include_fixed_dims=include_fixed_dims,
+    )
+    return uncertain_params
 
 
 def evaluate_objective(
@@ -863,6 +870,7 @@ def solve_rolling_horizon(
         charging_eta=None,
         discharging_eta=None,
         exclude_energy_throughputs=False,
+        simplify_lmp_set=False,
         ):
     """
     Solve a multi-period wind-battery model on a rolling horizon.
@@ -915,6 +923,10 @@ def solve_rolling_horizon(
         by fixing all to 0 and deactivating the throughput
         update constraints and constraints linking throughputs
         across periods. The default is `False`.
+    simplify_lmp_set : bool, optional
+        Simplify LMP uncertainty set by including only the
+        dimensions for which the bounds are unequal in the PyROS
+        solver calls. The default is `False`.
     """
     # cannot control beyond prediction horizon
     prediction_length = len(model.get_active_process_blocks())
@@ -1032,13 +1044,17 @@ def solve_rolling_horizon(
         # solve the model
         if is_pyros:
             first_stage_vars, second_stage_vars = get_dof_vars(model)
-            uncertain_params = get_uncertain_params(model)
+            uncertain_params = get_uncertain_params(
+                model,
+                lmp_set,
+                include_fixed_dims=not simplify_lmp_set,
+            )
             res = solver.solve(
                 model.pyomo_model,
                 first_stage_vars,
                 second_stage_vars,
                 uncertain_params,
-                lmp_set.pyros_set(),
+                lmp_set.pyros_set(include_fixed_dims=not simplify_lmp_set),
                 **solver_kwargs,
             )
         else:
@@ -1087,6 +1103,19 @@ def solve_rolling_horizon(
                 None,
             )
             if worst_case_lmp is not None:
+                # if LMP uncertainty set was simplified, need
+                # to restore the nominal LMP values for the fixed
+                # dimensions
+                if simplify_lmp_set:
+                    worst_case_lmp = lmp_set.lift_uncertain_params(
+                        worst_case_lmp,
+                        {
+                            idx: val
+                            for idx, val in enumerate(lmp_set.lmp_sig_nom)
+                            if idx in lmp_set.determine_dims_fixed_by_bounds()
+                        }
+                    )
+
                 active_periods = range(
                     model.current_time, model.current_time + prediction_length
                 )
@@ -1179,6 +1208,7 @@ if __name__ == "__main__":
     dr_order = 0
     charging_eff = 0.98
     excl_throughputs = True
+    simplify_lmp_unc_set = True
 
     logging.basicConfig(level=logging.INFO)
 
@@ -1222,8 +1252,6 @@ if __name__ == "__main__":
     # set up solvers
     solver = pyo.SolverFactory("gurobi")
     solver.options["NonConvex"] = 2
-    solver = pyo.SolverFactory("gams")
-    solver.options["solver"] = "baron"
     gams_baron = pyo.SolverFactory("gams")
     gams_baron.options["solver"] = "baron"
     couenne = pyo.SolverFactory("couenne")
@@ -1242,6 +1270,7 @@ if __name__ == "__main__":
         charging_eta=charging_eff,
         discharging_eta=charging_eff,
         exclude_energy_throughputs=excl_throughputs,
+        simplify_lmp_set=simplify_lmp_unc_set,
     )
     pdb.set_trace()
 
@@ -1280,5 +1309,6 @@ if __name__ == "__main__":
         charging_eta=charging_eff,
         discharging_eta=charging_eff,
         exclude_energy_throughputs=excl_throughputs,
+        simplify_lmp_set=simplify_lmp_unc_set,
     )
     pdb.set_trace()

@@ -75,9 +75,94 @@ class LMPBoxSet():
                    header='time\tlower\tnominal\tupper',
                    comments='', fmt=['%d', '%.3f', '%.3f', '%.3f'])
 
-    def pyros_set(self):
-        """Obtain corresponding PyROS BoxSet."""
-        return uncertainty_sets.BoxSet(bounds=self.bounds())
+    def determine_dims_fixed_by_bounds(self, tol=0):
+        """
+        Determine dimensions of the uncertainty set
+        for which the bounds are the same.
+        """
+        return [
+            idx for idx, bd in enumerate(self.bounds())
+            if bd[1] <= bd[0] + tol
+        ]
+
+    def pyros_set(self, include_fixed_dims=True):
+        """
+        Obtain corresponding PyROS BoxSet. Optionally,
+        include only the dimensions for which the bounds are
+        unequal.
+        """
+        if include_fixed_dims:
+            final_bounds = self.bounds()
+        else:
+            bounds = self.bounds()
+            fixed_dims = self.determine_dims_fixed_by_bounds()
+            final_bounds = [
+                bd for idx, bd in enumerate(bounds)
+                if idx not in fixed_dims
+            ]
+        return uncertainty_sets.BoxSet(bounds=final_bounds)
+
+    def get_uncertain_params(self, uncertain_params, include_fixed_dims=True):
+        """
+        Given a list of model components of length equal to the
+        dimensionality of the set, determine the components
+        corresponding to the dimensions not fixed by the
+        set's bounds (if so desired); otherwise, return all components.
+        """
+        assert len(uncertain_params) == len(self.lmp_sig_nom)
+
+        if not include_fixed_dims:
+            fixed_dims = self.determine_dims_fixed_by_bounds()
+            return list(
+                param for idx, param in enumerate(uncertain_params)
+                if idx not in fixed_dims
+            )
+        else:
+            return uncertain_params
+
+    def lift_uncertain_params(self, reduced_params, lifting_values):
+        """
+        'Lift' the reduced dimensions of the set (i.e the dimensions
+        for which the bounds are equal) back into the original set
+        dimensions.
+
+        Parameters
+        ----------
+        reduced_params : list(object)
+            List of parameter objects corresponding to reduced
+            dimensions.
+        lifting_values : dict, optional
+            Values to insert into each fixed dimension. Keys are
+            the indices of the fixed dimensions. Values are the
+            actual objects to be placed into the list to obtain
+            the 'lifted' object.
+
+        Returns
+        -------
+        lifted_params : list(object)
+            List of parameter objects in the original, full
+            uncertainty space.
+        """
+        fixed_dims = self.determine_dims_fixed_by_bounds()
+
+        if fixed_dims != list(lifting_values.keys()):
+            raise ValueError(
+                "Fixed dimensions mismatch. Provided insertion into "
+                f"dimensions {list(lifting_values.keys())}, but fixed "
+                f"dimensions are actually {fixed_dims}"
+            )
+
+        lifted_params = list()
+        reduced_dim_count = 0
+        for idx in range(len(self.lmp_sig_nom)):
+            if idx in fixed_dims:
+                val = lifting_values[idx]
+            else:
+                val = reduced_params[reduced_dim_count]
+                reduced_dim_count += 1
+            lifted_params.append(val)
+
+        return lifted_params
 
     def plot_bounds(self, ax, highlight_peak_effects=False, filename=None,
                     offset=0):
