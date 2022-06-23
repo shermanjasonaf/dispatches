@@ -656,7 +656,47 @@ def evaluate_objective(
     return (revenue, cost, revenue - cost)
 
 
-def create_two_stg_wind_battery_model(lmp_signal):
+def _exclude_energy_throughputs(model):
+    """
+    Exclude energy throughputs from a wind-battery model
+    process block, by (1) fixing energy throughputs to 0;
+    (2) deactivating constraints containing only throughput vars.
+    """
+    active_blks = model.get_active_process_blocks()
+    throughput_vars = ComponentSet(
+        blk.fs.battery.energy_throughput[0.0]
+        for blk in active_blks
+    )
+    init_throughput_vars = ComponentSet(
+        blk.fs.battery.initial_energy_throughput
+        for blk in active_blks
+    )
+
+    for var in throughput_vars | init_throughput_vars:
+        var.fix(0)
+
+    # deactivate energy throughput update
+    for blk in active_blks:
+        blk.fs.battery.accumulate_energy_throughput.deactivate()
+
+    # deactivate energy throughput link constraint
+    for con in model.pyomo_model.component_data_objects(
+            pyo.Constraint, active=True):
+        vars_in_con = ComponentSet(identify_variables(con.body))
+        is_subset = all(
+            var in
+            throughput_vars | init_throughput_vars
+            for var in vars_in_con
+        )
+
+        if is_subset:
+            con.deactivate()
+
+
+def create_two_stg_wind_battery_model(
+        lmp_signal,
+        exclude_energy_throughputs=False,
+        ):
     """
     Create a two-stage surrogate of the multi-stage
     wind battery model.
@@ -666,6 +706,11 @@ def create_two_stg_wind_battery_model(lmp_signal):
     lmp_signal : array-like
         LMP signal, of which the number of entries is equal
         to the model's prediction horizon length.
+    exclude_energy_throughputs : bool, optional
+        Exclude net energy throughputs from model.
+        (By fixing values to zero and deactivating energy
+        throughput update constraints). The default is
+        `False`.
 
     Returns
     -------
@@ -676,6 +721,9 @@ def create_two_stg_wind_battery_model(lmp_signal):
 
     model = create_multiperiod_wind_battery_model(n_time_points=horizon)
     transform_design_model_to_operation_model(model)
+
+    if exclude_energy_throughputs:
+        _exclude_energy_throughputs(model)
 
     # get the pyomo model
     pyomo_model = model.pyomo_model
@@ -705,6 +753,7 @@ def advance_time(
         wind_capacity=200e3,
         battery_power_capacity=25e3,
         battery_energy_capacity=100e3,
+        exclude_energy_throughputs=False,
         ):
     """
     Advance model instance to next time period, and
@@ -769,6 +818,8 @@ def advance_time(
     b.fs.battery.nameplate_power.fix(battery_power_capacity)
     b.fs.battery.nameplate_energy.fix(battery_energy_capacity)
     b.periodic_constraints[0].deactivate()
+    if exclude_energy_throughputs:
+        _exclude_energy_throughputs(model)
 
     # fix initial state of charge and throughput to values
     # from previous period
@@ -811,6 +862,7 @@ def solve_rolling_horizon(
         solver_kwargs=None,
         charging_eta=None,
         discharging_eta=None,
+        exclude_energy_throughputs=False,
         ):
     """
     Solve a multi-period wind-battery model on a rolling horizon.
@@ -858,6 +910,11 @@ def solve_rolling_horizon(
         Battery discharging efficiency. Default is `None`,
         in which case the values already present in the model are
         used.
+    exclude_energy_throughputs : bool, optional
+        Exclude battery energy throughputs from the model,
+        by fixing all to 0 and deactivating the throughput
+        update constraints and constraints linking throughputs
+        across periods. The default is `False`.
     """
     # cannot control beyond prediction horizon
     prediction_length = len(model.get_active_process_blocks())
@@ -969,6 +1026,7 @@ def solve_rolling_horizon(
                     lmp_signal[lmp_start:lmp_stop],
                     lmp_set_class=lmp_set_class,
                     lmp_set_class_params=lmp_set_kwargs,
+                    exclude_energy_throughputs=exclude_energy_throughputs,
                 )
 
         # solve the model
@@ -1120,6 +1178,7 @@ if __name__ == "__main__":
     solve_pyros = True
     dr_order = 0
     charging_eff = 0.98
+    excl_throughputs = True
 
     logging.basicConfig(level=logging.INFO)
 
@@ -1155,11 +1214,16 @@ if __name__ == "__main__":
     )
 
     # create model, and obtain degree-of-freedom partitioning
-    model = create_two_stg_wind_battery_model(lmp_signal[:horizon])
+    model = create_two_stg_wind_battery_model(
+        lmp_signal[:horizon],
+        exclude_energy_throughputs=excl_throughputs,
+    )
 
     # set up solvers
     solver = pyo.SolverFactory("gurobi")
     solver.options["NonConvex"] = 2
+    solver = pyo.SolverFactory("gams")
+    solver.options["solver"] = "baron"
     gams_baron = pyo.SolverFactory("gams")
     gams_baron.options["solver"] = "baron"
     couenne = pyo.SolverFactory("couenne")
@@ -1177,6 +1241,7 @@ if __name__ == "__main__":
         lmp_set_kwargs=lmp_set_params,
         charging_eta=charging_eff,
         discharging_eta=charging_eff,
+        exclude_energy_throughputs=excl_throughputs,
     )
     pdb.set_trace()
 
@@ -1214,5 +1279,6 @@ if __name__ == "__main__":
         output_dir=os.path.join(base_dir, f"rolling_horizon_ro_dr_{dr_order}"),
         charging_eta=charging_eff,
         discharging_eta=charging_eff,
+        exclude_energy_throughputs=excl_throughputs,
     )
     pdb.set_trace()
