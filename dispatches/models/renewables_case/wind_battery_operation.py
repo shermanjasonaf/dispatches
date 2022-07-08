@@ -1051,7 +1051,7 @@ def solve_rolling_horizon(
         kwargs_set = set(solver_kwargs.keys())
 
         assert prereq_args.issubset(kwargs_set)
-        assert all(arg not in kwargs_set for arg in antireq_args)
+        assert not kwargs_set.intersection(antireq_args)
         assert lmp_set_class is not None
     else:
         assert "load_solutions" not in solver_kwargs
