@@ -696,7 +696,9 @@ def evaluate_objective(
         lmp_signal=None,
         ):
     """
-    Evaluate model objective.
+    Evaluate model objective and related quantities.
+    In particular, we evaluate the operating revenue, cost, and
+    profit.
 
     Parameters
     ----------
@@ -1214,26 +1216,41 @@ def solve_rolling_horizon(
                 "\nTerminating rolling horizon optimization."
             )
 
+        # EVALUATE AND DISPLAY revenue, cost, profit:
+        # (1) accumulated up to + including current time
+        # (2) obtained/incurred for next control period
+        #     (starting from + including current time)
+        #     for a control horizon of length 1, this is just
+        #     current time
+        # (3) projected for just solved prediction horizon,
+        #     starting from and including current time
         controlled_periods = list(
             range(idx * control_length, idx + 1 * control_length),
         )
-        print("-" * 80)
+        print("=" * 80)
         print(f"Step {idx} (decision for periods {controlled_periods})")
-        projected_obj_tuple = evaluate_objective(
-            model,
-            start=0,
-            stop=num_steps * control_length - 1,
-        )
         accumulated_obj_tuple = evaluate_objective(
             model,
             start=0,
             stop=model.current_time,
         )
+        next_ctrl_obj_tuple = evaluate_objective(
+            model,
+            start=model.current_time,
+            stop=model.current_time + control_length - 1,
+        )
+        projected_obj_tuple = evaluate_objective(
+            model,
+            start=model.current_time,
+            stop=model.current_time + prediction_length,
+        )
         print(f"{'':13s}{'revenue':10s}{'cost':10s}{'profit':10s}")
-        proj_val_str = "".join(f"{val:<10.2f}" for val in projected_obj_tuple)
         acc_val_str = "".join(f"{val:<10.2f}" for val in accumulated_obj_tuple)
-        print(f"{'projected':13s}{proj_val_str}")
+        ctrl_val_str = "".join(f"{val:<10.2f}" for val in next_ctrl_obj_tuple)
+        proj_val_str = "".join(f"{val:<10.2f}" for val in projected_obj_tuple)
         print(f"{'accumulated':13s}{acc_val_str}")
+        print(f"{'next ctrl':13s}{ctrl_val_str}")
+        print(f"{'projected':13s}{proj_val_str}")
 
         if output_dir is not None:
             # obtain worst-case LMP, plot as 'custom' LMP signal.
@@ -1344,7 +1361,7 @@ def perform_incidence_analysis(model):
 
 if __name__ == "__main__":
     horizon = 12
-    num_steps = 1
+    num_steps = 12
     start = 4000
     solve_pyros = True
     dr_order = 1
@@ -1422,6 +1439,8 @@ if __name__ == "__main__":
             simplify_lmp_set=simplify_lmp_unc_set,
             deterministic_case=case,
         )
+
+    pdb.set_trace()
 
     # create model
     mdl = create_two_stg_wind_battery_model(
