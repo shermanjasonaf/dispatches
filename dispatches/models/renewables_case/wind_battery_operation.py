@@ -137,7 +137,7 @@ def plot_soc_results(
     charge_bounds = list()
 
     for t, blk in zip(periods, blocks):
-        charges.append(pyo.value(blk.fs.battery.state_of_charge[0.0]))
+        charges.append(pyo.value(blk.fs.battery.initial_state_of_charge))
         lmp_values.append(pyo.value(mp_model.pyomo_model.LMP[t]))
 
         charge_lim = pyo.value(
@@ -147,11 +147,15 @@ def plot_soc_results(
         )
         charge_bounds.append(charge_lim)
 
+    # add final state of charge
+    charges.append(pyo.value(blk.fs.battery.state_of_charge[0.0]))
+    app_periods = np.append(periods, [periods[-1] + 1])
+
     # plot results for active periods
     if periods[periods >= active_start].size > 0:
         ax1.plot(
-            periods[periods >= active_start],
-            np.array(charges)[periods >= active_start] / 1e3,
+            app_periods[app_periods >= active_start],
+            np.array(charges)[app_periods >= active_start] / 1e3,
             label="state of charge",
             linewidth=1.8,
             color="blue"
@@ -169,8 +173,8 @@ def plot_soc_results(
     if periods[periods < active_start].size > 0:
         alpha = 0.3 if highlight_active_periods else 1
         ax1.plot(
-            periods[periods <= active_start],
-            np.array(charges)[periods <= active_start] / 1e3,
+            app_periods[app_periods <= active_start],
+            np.array(charges)[app_periods <= active_start] / 1e3,
             label=(
                 "state of charge (prev)"
                 if highlight_active_periods and label_inactive_periods
@@ -853,6 +857,7 @@ def advance_time(
         new_lmp_sig,
         lmp_set_class=None,
         lmp_set_class_params=None,
+        set_signal_to="nominal",
         wind_capacity=200e3,
         battery_power_capacity=25e3,
         battery_energy_capacity=100e3,
@@ -889,7 +894,12 @@ def advance_time(
         An updated LMP uncertainty set, if a constructor is provided
         through the `lmp_set_class` argument.
     """
+    # validate arguments
     assert len(new_lmp_sig) == len(model.get_active_process_blocks())
+    assert set_signal_to in {"nominal", "lower_bound", "upper_bound"}
+    if set_signal_to in {"lower_bound", "upper_bound"}:
+        assert lmp_set_class is not None
+        assert isinstance(lmp_set_params, dict)
 
     from dispatches.models.renewables_case.load_parameters import wind_speeds
     new_time = model.pyomo_model.TIME.last() + 1
@@ -930,14 +940,27 @@ def advance_time(
     b_init.fs.battery.initial_state_of_charge.fix()
     b_init.fs.battery.initial_energy_throughput.fix()
 
+    # construct an updated uncertainty set (if constructor provided)
+    if lmp_set_class is not None:
+        lmp_set = lmp_set_class(new_lmp_sig, **lmp_set_class_params)
+
     # update LMP signal and model objective
+    if set_signal_to == "nominal":
+        lmp_update_sig = new_lmp_sig
+    elif set_signal_to == "lower_bound":
+        lmp_update_sig = np.array([bd[0] for bd in lmp_set.bounds()])
+    else:  # upper bound
+        lmp_update_sig = np.array([bd[1] for bd in lmp_set.bounds()])
+
+    assert len(lmp_update_sig) == len(new_lmp_sig)
+
     lmp_sig = {
         t: pyo.value(model.pyomo_model.LMP[t])
         for t in range(model.current_time + 1)
     }
     lmp_sig.update({
-        t + model.current_time: new_lmp_sig[t]
-        for t in range(len(new_lmp_sig))
+        t + model.current_time: lmp_update_sig[t]
+        for t in range(len(lmp_update_sig))
     })
     construct_profit_obj(model, lmp_sig)
 
@@ -947,9 +970,7 @@ def advance_time(
         if all(var.fixed for var in identify_variables(con.body)):
             con.deactivate()
 
-    # construct an updated uncertainty set (if constructor provided)
-    if lmp_set_class is not None:
-        return lmp_set_class(new_lmp_sig, **lmp_set_class_params)
+    return lmp_set
 
 
 def solve_rolling_horizon(
@@ -967,6 +988,7 @@ def solve_rolling_horizon(
         discharging_eta=None,
         exclude_energy_throughputs=False,
         simplify_lmp_set=False,
+        deterministic_case="nominal",
         ):
     """
     Solve a multi-period wind-battery model on a rolling horizon.
@@ -1056,6 +1078,17 @@ def solve_rolling_horizon(
     else:
         assert "load_solutions" not in solver_kwargs
 
+        # validate deterministic case argument
+        assert deterministic_case in {"upper_bound", "lower_bound", "nominal"}
+        if deterministic_case in {"lower_bound", "upper_bound"}:
+            assert lmp_set_class is not None
+
+            # TODO: advancing time in event control length is
+            #       more than 1: LMP bounds may be off, since
+            #       advance_time considers only the next step
+            #       not the next control_length steps
+            assert control_length == 1
+
     # obtain new LMP signal
     lmp_signal = get_lmp_data(
         lmp_signal_filename,
@@ -1111,6 +1144,13 @@ def solve_rolling_horizon(
             else:
                 lmp_set = None
 
+            if deterministic_case == "nominal":
+                lmp_update_sig = init_lmp_sig
+            elif deterministic_case == "lower_bound":
+                lmp_update_sig = np.array([bd[0] for bd in lmp_set.bounds()])
+            else:
+                lmp_update_sig = np.array([bd[1] for bd in lmp_set.bounds()])
+
             # set up extended LMP signal.
             # this changes the LMP values for the currently
             # active process blocks
@@ -1120,7 +1160,7 @@ def solve_rolling_horizon(
             }
             lmp_sig.update({
                 t + model.current_time: val
-                for t, val in enumerate(init_lmp_sig)
+                for t, val in enumerate(lmp_update_sig)
             })
             construct_profit_obj(model, lmp_sig)
         else:
@@ -1135,6 +1175,7 @@ def solve_rolling_horizon(
                     lmp_set_class=lmp_set_class,
                     lmp_set_class_params=lmp_set_kwargs,
                     exclude_energy_throughputs=exclude_energy_throughputs,
+                    set_signal_to=deterministic_case,
                 )
 
         # solve the model
@@ -1308,7 +1349,7 @@ if __name__ == "__main__":
     solve_pyros = True
     dr_order = 1
     charging_eff = 0.95
-    excl_throughputs = True
+    excl_throughputs = False
     simplify_lmp_unc_set = True
 
     logging.basicConfig(level=logging.INFO)
@@ -1347,12 +1388,6 @@ if __name__ == "__main__":
         start=start,
     )
 
-    # create model, and obtain degree-of-freedom partitioning
-    model = create_two_stg_wind_battery_model(
-        lmp_signal[:horizon],
-        exclude_energy_throughputs=excl_throughputs,
-    )
-
     # set up solvers
     solver = pyo.SolverFactory("gurobi")
     solver.options["NonConvex"] = 2
@@ -1361,25 +1396,38 @@ if __name__ == "__main__":
     couenne = pyo.SolverFactory("couenne")
 
     # rolling horizon simulation of deterministic model
-    solve_rolling_horizon(
-        model,
-        solver,
-        lmp_signal_filename,
-        1,
-        num_steps,
-        start,
-        output_dir=os.path.join(base_dir, "rolling_horizon_deterministic"),
-        lmp_set_class=HysterLMPBoxSet,
-        lmp_set_kwargs=lmp_set_params,
-        charging_eta=charging_eff,
-        discharging_eta=charging_eff,
-        exclude_energy_throughputs=excl_throughputs,
-        simplify_lmp_set=simplify_lmp_unc_set,
-    )
-    pdb.set_trace()
+    for case in ["lower_bound", "nominal", "upper_bound"]:
+        # create model, and obtain degree-of-freedom partitioning
+        model = create_two_stg_wind_battery_model(
+            lmp_signal[:horizon],
+            exclude_energy_throughputs=excl_throughputs,
+        )
+
+        solve_rolling_horizon(
+            model,
+            solver,
+            lmp_signal_filename,
+            1,
+            num_steps,
+            start,
+            output_dir=os.path.join(
+                base_dir,
+                f"rolling_horizon_deterministic_{case}",
+            ),
+            lmp_set_class=HysterLMPBoxSet,
+            lmp_set_kwargs=lmp_set_params,
+            charging_eta=charging_eff,
+            discharging_eta=charging_eff,
+            exclude_energy_throughputs=excl_throughputs,
+            simplify_lmp_set=simplify_lmp_unc_set,
+            deterministic_case=case,
+        )
 
     # create model
-    mdl = create_two_stg_wind_battery_model(lmp_signal[:horizon])
+    mdl = create_two_stg_wind_battery_model(
+        lmp_signal[:horizon],
+        exclude_energy_throughputs=excl_throughputs,
+    )
 
     # set up PyROS solver and solver options
     pyros_solver = pyo.SolverFactory("pyros")
