@@ -191,10 +191,11 @@ class LMPBoxSet():
         color = "black"
 
         # generate the plots
-        ax.plot(periods, upper_bds, "--", color="green", linewidth=1.0)
-        ax.plot(periods, lower_bds, "--", color="green", label="bounds",
-                linewidth=1.0)
-        ax.fill_between(periods, lower_bds, upper_bds,
+        ax.step(periods, upper_bds, "--", color="green", linewidth=1.0,
+                where="post")
+        ax.step(periods, lower_bds, "--", color="green", label="bounds",
+                linewidth=1.0, where="post")
+        ax.fill_between(periods, lower_bds, upper_bds, step="post",
                         color="green", alpha=0.1, label="uncertainty")
 
         # highlight peak effects if desired
@@ -208,17 +209,17 @@ class LMPBoxSet():
                 peak_times = cond
                 # plot bounds and LMP signal
                 peak_hrs = times[peak_times] + offset
-                ax.plot(peak_hrs, upper_bds[peak_times], "--", color="red",
-                        linewidth=1.0)
-                ax.plot(peak_hrs, lower_bds[peak_times], "--", color="red",
-                        label='peak times', linewidth=1.0)
+                ax.step(peak_hrs, upper_bds[peak_times], "--", color="red",
+                        linewidth=1.0, where="post")
+                ax.step(peak_hrs, lower_bds[peak_times], "--", color="red",
+                        label='peak times', linewidth=1.0, where="post")
                 ax.fill_between(peak_hrs, lower_bds[peak_times],
                                 upper_bds[peak_times],
-                                color="red", alpha=0.1)
+                                color="red", alpha=0.1, step="post")
 
         # plot nominal LMP
-        ax.plot(periods, self.lmp_sig_nom, color=color, label='nominal',
-                linewidth=1.8)
+        ax.step(periods, self.lmp_sig_nom, color=color, label='nominal',
+                linewidth=1.8, where="post")
 
         # labels
         # ax.set_ylabel('LMP signal ($/MWh)')

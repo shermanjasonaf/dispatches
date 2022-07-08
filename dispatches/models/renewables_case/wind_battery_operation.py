@@ -232,22 +232,24 @@ def _plot_lmp(ax, periods, lmp_values, lmp_set,
         # TODO: enforce LMP units at model declaration
         lmp_set.plot_bounds(ax, offset=active_start)
     else:
-        ax.plot(
+        ax.step(
             periods[periods >= active_start],
             np.array(lmp_values)[periods >= active_start],
             label="LMP",
             linewidth=1.8,
             color="black",
+            where="post",
         )
     if periods[periods < active_start].size > 0:
         alpha = 0.3 if highlight_active_periods else 1
-        ax.plot(
+        ax.step(
             periods[periods <= active_start],
             np.array(lmp_values)[periods <= active_start],
             label="LMP (prev)",
             linewidth=1.8,
             color="black",
             alpha=alpha,
+            where="post",
         )
 
     # plot custom LMP values
@@ -256,8 +258,8 @@ def _plot_lmp(ax, periods, lmp_values, lmp_set,
         per_arr = np.array(list(lmp_dict.keys()))
         assert np.all(per_arr == np.arange(per_arr[0], per_arr[-1] + 1))
         lmp_arr = np.array(list(lmp_dict.values()))
-        ax.plot(per_arr, lmp_arr, label=lmp_label, linewidth=1.8,
-                color="green")
+        ax.step(per_arr, lmp_arr, label=lmp_label, linewidth=1.8,
+                color="green", where="post")
 
     ax.legend(bbox_to_anchor=(1, -0.15), loc="upper right", ncol=1)
 
