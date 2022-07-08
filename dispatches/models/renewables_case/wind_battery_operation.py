@@ -43,6 +43,7 @@ def plot_soc_results(
         start=None,
         stop=None,
         highlight_active_periods=False,
+        label_inactive_periods=False,
         custom_lmp_vals=None,
         lmp_bounds=None,
         xmin=None,
@@ -171,7 +172,9 @@ def plot_soc_results(
             periods[periods <= active_start],
             np.array(charges)[periods <= active_start] / 1e3,
             label=(
-                "state of charge (prev)" if highlight_active_periods else None
+                "state of charge (prev)"
+                if highlight_active_periods and label_inactive_periods
+                else None
             ),
             linewidth=1.8,
             color="blue",
@@ -181,7 +184,9 @@ def plot_soc_results(
             periods[periods <= active_start],
             np.array(charge_bounds)[periods <= active_start] / 1e3,
             label=(
-                "charging limit (prev)" if highlight_active_periods else None
+                "charging limit (prev)"
+                if highlight_active_periods and label_inactive_periods
+                else None
             ),
             linewidth=1.8,
             color="red",
@@ -278,6 +283,7 @@ def plot_power_output_results(
         start=None,
         stop=None,
         highlight_active_periods=False,
+        label_inactive_periods=False,
         custom_lmp_vals=None,
         lmp_bounds=None,
         xmin=None,
@@ -319,19 +325,30 @@ def plot_power_output_results(
 
     # initialize containers
     battery_elecs = list()
+    nameplate_powers = list()
     grid_elecs = list()
     wind_outputs = list()
     lmp_values = list()
+    wind_capacities = list()
 
     for t, blk in zip(periods, blocks):
         battery_elecs.append(pyo.value(blk.fs.battery.elec_out[0]))
         grid_elecs.append(pyo.value(blk.fs.splitter.grid_elec[0]))
         wind_outputs.append(pyo.value(blk.fs.windpower.electricity[0]))
         lmp_values.append(pyo.value(mp_model._pyomo_model.LMP[t]))
+        nameplate_powers.append(pyo.value(blk.fs.battery.nameplate_power))
+        wind_capacities.append(
+            pyo.value(
+                blk.fs.windpower.system_capacity
+                * blk.fs.windpower.capacity_factor[0.0]
+            )
+        )
 
     battery_elecs.append(battery_elecs[-1])
     grid_elecs.append(grid_elecs[-1])
     wind_outputs.append(wind_outputs[-1])
+    nameplate_powers.append(nameplate_powers[-1])
+    wind_capacities.append(wind_capacities[-1])
 
     if periods[periods >= active_start].size > 0:
         ax1.step(
@@ -357,7 +374,24 @@ def plot_power_output_results(
             label="wind production",
             linewidth=1.8,
             color="purple",
-            linestyle="dashed",
+        )
+        ax1.step(
+            periods[periods >= active_start],
+            np.array(nameplate_powers)[periods >= active_start] / 1e3,
+            where="post",
+            label="nameplate power",
+            linewidth=1.5,
+            color="blue",
+            linestyle="dotted",
+        )
+        ax1.step(
+            periods[periods >= active_start],
+            np.array(wind_capacities)[periods >= active_start] / 1e3,
+            where="post",
+            label="wind capacity",
+            linewidth=1.5,
+            color="purple",
+            linestyle="dotted",
         )
 
     if periods[periods < active_start].size > 0:
@@ -366,7 +400,9 @@ def plot_power_output_results(
             periods[periods <= active_start],
             np.array(grid_elecs)[periods <= active_start] / 1e3,
             label=(
-                "wind-to-grid (prev)" if highlight_active_periods else None
+                "wind-to-grid (prev)"
+                if highlight_active_periods and label_inactive_periods
+                else None
             ),
             where="post",
             linewidth=1.8,
@@ -377,7 +413,9 @@ def plot_power_output_results(
             periods[periods <= active_start],
             np.array(battery_elecs)[periods <= active_start] / 1e3,
             label=(
-                "battery-to-grid (prev)" if highlight_active_periods else None
+                "battery-to-grid (prev)"
+                if highlight_active_periods and label_inactive_periods
+                else None
             ),
             linewidth=1.8,
             where="post",
@@ -389,11 +427,40 @@ def plot_power_output_results(
             np.array(wind_outputs)[periods <= active_start] / 1e3,
             where="post",
             label=(
-                "wind production (prev)" if highlight_active_periods else None
+                "wind-to-all"
+                if highlight_active_periods and label_inactive_periods
+                else None
             ),
             linewidth=1.8,
             color="purple",
-            linestyle="dashed",
+            alpha=alpha,
+        )
+        ax1.step(
+            periods[periods <= active_start],
+            np.array(nameplate_powers)[periods <= active_start] / 1e3,
+            where="post",
+            label=(
+                "nameplate power (prev)"
+                if highlight_active_periods and label_inactive_periods
+                else None
+            ),
+            linewidth=1.5,
+            color="blue",
+            linestyle="dotted",
+            alpha=alpha,
+        )
+        ax1.step(
+            periods[periods <= active_start],
+            np.array(wind_capacities)[periods <= active_start] / 1e3,
+            where="post",
+            label=(
+                "wind capacity (prev)"
+                if highlight_active_periods and label_inactive_periods
+                else None
+            ),
+            linewidth=1.5,
+            color="purple",
+            linestyle="dotted",
             alpha=alpha,
         )
 
@@ -1202,13 +1269,14 @@ def perform_incidence_analysis(model):
 
 
 if __name__ == "__main__":
-    horizon = 14
+    horizon = 4
+    num_steps = 1
     start = 4000
     solve_pyros = True
-    dr_order = 0
-    charging_eff = 0.98
+    dr_order = 1
+    charging_eff = 0.95
     excl_throughputs = True
-    simplify_lmp_unc_set = True
+    simplify_lmp_unc_set = False
 
     logging.basicConfig(level=logging.INFO)
 
@@ -1230,7 +1298,10 @@ if __name__ == "__main__":
     )
 
     # make directory for storing results
-    base_dir = f"../../../../results/results/hor_{horizon}_start_{start}"
+    base_dir = (
+        f"../../../../results/results/hor_{horizon}_start_"
+        f"{start}_steps_{num_steps}"
+    )
     os.makedirs(base_dir, exist_ok=True)
 
     # get LMP data (and convert to $/kWh)
@@ -1262,7 +1333,7 @@ if __name__ == "__main__":
         solver,
         lmp_signal_filename,
         1,
-        horizon,
+        num_steps,
         start,
         output_dir=os.path.join(base_dir, "rolling_horizon_deterministic"),
         lmp_set_class=HysterLMPBoxSet,
@@ -1300,7 +1371,7 @@ if __name__ == "__main__":
         pyros_solver,
         lmp_signal_filename,
         1,
-        horizon,
+        num_steps,
         start,
         lmp_set_class=HysterLMPBoxSet,
         lmp_set_kwargs=lmp_set_params,
