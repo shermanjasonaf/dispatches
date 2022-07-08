@@ -9,6 +9,7 @@ Uncertainty models for multiperiod rankine model LMP's.
 """
 
 import copy
+from itertools import chain
 
 import numpy as np
 # import matplotlib.pyplot as plt
@@ -102,7 +103,12 @@ class LMPBoxSet():
             ]
         return uncertainty_sets.BoxSet(bounds=final_bounds)
 
-    def get_uncertain_params(self, uncertain_params, include_fixed_dims=True):
+    def get_uncertain_params(
+            self,
+            uncertain_params,
+            include_fixed_dims=True,
+            nested=False,
+            ):
         """
         Given a list of model components of length equal to the
         dimensionality of the set, determine the components
@@ -113,12 +119,20 @@ class LMPBoxSet():
 
         if not include_fixed_dims:
             fixed_dims = self.determine_dims_fixed_by_bounds()
-            return list(
-                param for idx, param in enumerate(uncertain_params)
-                if idx not in fixed_dims
-            )
         else:
-            return uncertain_params
+            fixed_dims = []
+
+        nested_param_list = list()
+        for idx, param in enumerate(uncertain_params):
+            if idx not in fixed_dims:
+                nested_param_list.append([param])
+            else:
+                nested_param_list.append([])
+
+        if nested:
+            return nested_param_list
+        else:
+            return list(chain.from_iterable(nested_param_list))
 
     def lift_uncertain_params(self, reduced_params, lifting_values):
         """

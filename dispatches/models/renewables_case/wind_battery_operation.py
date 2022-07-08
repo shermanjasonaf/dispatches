@@ -617,10 +617,15 @@ def construct_profit_obj(model, lmp_signal):
         return profit
 
 
-def get_dof_vars(model):
+def get_dof_vars(model, nested=True):
     """
     Obtain first-stage and second-stage degrees of freedom
     for all active model blocks.
+
+    Optionally, compile the second-stage variables into a
+    nested list of Vars, in which each inner list contains
+    the variables corresponding to a corresponding stage of
+    decision making (for multi-stage RO).
     """
     active_blks = model.get_active_process_blocks()
 
@@ -629,17 +634,30 @@ def get_dof_vars(model):
         list(active_blks)[0].fs.battery.elec_out[0],
         list(active_blks)[0].fs.windpower.electricity[0.0],
     ]
-    second_stage_vars = (
-        list(blk.fs.splitter.grid_elec[0] for blk in list(active_blks)[1:])
-        + list(blk.fs.battery.elec_out[0] for blk in list(active_blks)[1:])
-        + list(
-            blk.fs.windpower.electricity[0.0] for blk in list(active_blks)[1:]
+
+    grid_vars = list()
+    battery_vars = list()
+    wind_vars = list()
+
+    second_stage_vars = list()
+    for blk in list(active_blks)[1:]:
+        grid_vars.append(blk.fs.splitter.grid_elec[0])
+        battery_vars.append(blk.fs.battery.elec_out[0])
+        wind_vars.append(blk.fs.windpower.electricity[0])
+
+    if nested:
+        second_stage_vars = list(
+            [gvar, bvar, wvar]
+            for gvar, bvar, wvar
+            in zip(grid_vars, battery_vars, wind_vars)
         )
-    )
+    else:
+        second_stage_vars = grid_vars + battery_vars + wind_vars
+
     return first_stage_vars, second_stage_vars
 
 
-def get_uncertain_params(model, lmp_set, include_fixed_dims=True):
+def get_uncertain_params(model, lmp_set, include_fixed_dims=True, nested=True):
     """
     Obtain uncertain parameters for all active model blocks.
     Optionally, include dimensions which are implicitly 'fixed'
@@ -652,7 +670,16 @@ def get_uncertain_params(model, lmp_set, include_fixed_dims=True):
     uncertain_params = lmp_set.get_uncertain_params(
         lmp_params,
         include_fixed_dims=include_fixed_dims,
+        nested=nested,
     )
+
+    if nested:
+        # lump the first and second lists into a single list,
+        # as the uncertain parameters in these lists are realized
+        # by the true second stage
+        uncertain_params[0] += uncertain_params[1]
+        uncertain_params.remove(uncertain_params[1])
+
     return uncertain_params
 
 
@@ -1110,11 +1137,15 @@ def solve_rolling_horizon(
 
         # solve the model
         if is_pyros:
-            first_stage_vars, second_stage_vars = get_dof_vars(model)
+            first_stage_vars, second_stage_vars = get_dof_vars(
+                model,
+                nested=True,
+            )
             uncertain_params = get_uncertain_params(
                 model,
                 lmp_set,
                 include_fixed_dims=not simplify_lmp_set,
+                nested=True,
             )
             res = solver.solve(
                 model.pyomo_model,
@@ -1269,14 +1300,14 @@ def perform_incidence_analysis(model):
 
 
 if __name__ == "__main__":
-    horizon = 4
+    horizon = 12
     num_steps = 1
     start = 4000
     solve_pyros = True
     dr_order = 1
     charging_eff = 0.95
     excl_throughputs = True
-    simplify_lmp_unc_set = False
+    simplify_lmp_unc_set = True
 
     logging.basicConfig(level=logging.INFO)
 
