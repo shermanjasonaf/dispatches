@@ -1468,7 +1468,7 @@ def perform_incidence_analysis(model):
 
 if __name__ == "__main__":
     horizon = 12
-    num_steps = 1
+    num_steps = 24
     start = 2000
     solve_pyros = True
     dr_order = 1
@@ -1478,6 +1478,9 @@ if __name__ == "__main__":
     simplify_uncertainty_set = False
 
     logging.basicConfig(level=logging.INFO)
+
+    import sys
+    sys.setrecursionlimit(2000)
 
     from dispatches.models.renewables_case.uncertainty_models.\
         lmp_uncertainty_models import CustomBoundsLMPBoxSet
