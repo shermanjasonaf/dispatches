@@ -10,6 +10,7 @@ and windpower capacity levels and their associated uncertainties.
 """
 
 import abc
+import copy
 import itertools
 
 import numpy as np
@@ -36,7 +37,7 @@ class Forecaster(abc.ABC):
     Class for forecasting LMP signal and wind production capacities.
     """
     @abc.abstractmethod
-    def forecast_energy_prices(self, start, number_periods):
+    def forecast_energy_prices(self, number_periods):
         """
         Forecast (nominal) energy prices (LMPs) for the next
         `number_periods` time intervals, including the
@@ -44,8 +45,49 @@ class Forecaster(abc.ABC):
         """
         ...
 
+    @property
+    def current_time(self):
+        return self._current_time
+
+    @current_time.setter
+    def current_time(self, current_time):
+        raise AttributeError("Can't set attribute {__name__}")
+
+    def advance_time(self):
+        """Advance current time tracked by forecaster."""
+        self._current_time += 1
+
+    @abc.abstractclassmethod
+    def historical_energy_prices(self, periods):
+        """
+        Evaluate historical energy prices for a sequence of specified
+        periods.
+
+        Parameters
+        ----------
+        periods : array_like
+            Periods for which to provide historical prices.
+        """
+        ...
+
+    @abc.abstractclassmethod
+    def historical_wind_production(self, periods, capacity_factors=False):
+        """
+        Evaluate historical wind production levels for a sequence
+        of specified periods.
+
+        Parameters
+        ----------
+        periods : array_like
+            Periods for which to provide historical prices.
+        capacity_factors : bool, optional
+            Provide capacity factors instead of wind production
+            levels. The default is `False`.
+        """
+        ...
+
     @abc.abstractmethod
-    def forecast_wind_production(self, start, number_periods):
+    def forecast_wind_production(self, number_periods):
         """
         Forecast (nominal) wind generation capacities for the
         next `number_periods` time intervals, including
@@ -54,7 +96,7 @@ class Forecaster(abc.ABC):
         ...
 
     @abc.abstractmethod
-    def forecast_price_uncertainty(self, start, number_periods):
+    def forecast_price_uncertainty(self, number_periods):
         """
         Forecast uncertainty in the LMPs for the next `number_periods`
         time intervals, including the current period.
@@ -62,7 +104,7 @@ class Forecaster(abc.ABC):
         ...
 
     @abc.abstractmethod
-    def forecast_wind_uncertainty(self, start, number_periods):
+    def forecast_wind_uncertainty(self, number_periods):
         """
         Forecast uncertainty in the wind prodution levels for the
         next `number_periods` time intervals, including the current
@@ -71,7 +113,7 @@ class Forecaster(abc.ABC):
         ...
 
     @abc.abstractmethod
-    def get_uncertain_params(self, lmp_params, wind_params, start, **kwds):
+    def get_uncertain_params(self, lmp_params, wind_params, **kwds):
         """
         Given LMP and wind uncertain parameters, group uncertain
         parameters by decision making stage (in a multistage
@@ -83,7 +125,6 @@ class Forecaster(abc.ABC):
     @abc.abstractmethod
     def get_joint_lmp_wind_pyros_set(
             self,
-            start,
             num_intervals,
             **kwds,
             ):
@@ -132,6 +173,7 @@ class Bus309Backcaster(Forecaster):
             wind_capacity,
             lmp_set_class_params=None,
             wind_set_class_params=None,
+            start=0,
             ):
         """Construct LMP forecaster.
 
@@ -140,6 +182,9 @@ class Bus309Backcaster(Forecaster):
         # the column names
         self.df = pd.read_csv(data_file)
         self.fix_df_column_names(self.df)
+
+        # current starting time
+        self._current_time = start
 
         # change index to integer counters
         self.df["period_index"] = range(len(self.df.index))
@@ -170,13 +215,16 @@ class Bus309Backcaster(Forecaster):
         self._wind_capacity = wind_capacity
 
         outputs_within_bounds = all(
-            (self.df["Output DA Forecast"] <= self._wind_capacity)
+            (self.df["Output DA"] <= self._wind_capacity)
         )
         if not outputs_within_bounds:
             raise ValueError(
                 "Output wind production forecasts exceed wind capacity "
                 f"of {wind_capacity}"
             )
+
+    def copy(self):
+        return copy.deepcopy(self)
 
     @classmethod
     def fix_df_column_names(cls, df):
@@ -197,7 +245,7 @@ class Bus309Backcaster(Forecaster):
     def wind_capacity(self, val):
         raise AttributeError("Cannot set attribute `wind_capacity`")
 
-    def _forecast(self, column_name, start, num_intervals):
+    def _forecast(self, column_name, num_intervals):
         """Backcast energy prices.
 
         Parameters
@@ -217,6 +265,8 @@ class Bus309Backcaster(Forecaster):
             Index is `range(self.n_prev_days)`.
             Columns are `range(start, start+num_intervals)`.
         """
+        start = self.current_time
+
         samples = pd.DataFrame(
             index=range(self.n_prev_days),
             columns=range(start, start + num_intervals),
@@ -238,15 +288,62 @@ class Bus309Backcaster(Forecaster):
 
         return samples
 
-    def forecast_energy_prices(self, start, num_intervals):
+    def historical_energy_prices(self, periods):
+        """
+        Get historical energy price data.
+
+        Parameters
+        ----------
+        periods : int or array_like
+            Indexes of periods for which to collect
+            historical data. All must correspond
+            to periods preceding the current time.
+
+        Returns
+        -------
+        : numpy.ndarray
+            Historical energy prices for the specified periods.
+        """
+        if isinstance(periods, int):
+            periods = [periods]
+        return self.df.loc[periods, "LMP DA"].values
+
+    def historical_wind_production(self, periods, capacity_factors=False):
+        """
+        Get historical wind production level data.
+
+        Parameters
+        ----------
+        periods : int or array_like
+            Indexes of periods for which to collect
+            historical data. All must correspond
+            to periods preceding the current time.
+        capacity_factors : bool, optional
+            Return capacity factors instead of wind production levels.
+            The default is `False`.
+
+        Returns
+        -------
+        : numpy.ndarray
+            Historical wind production levels/capacity factors
+            for the specified periods.
+        """
+        if isinstance(periods, int):
+            periods = [periods]
+        production_levels = self.df.loc[periods, "Output DA"].values
+
+        if capacity_factors:
+            production_levels /= self._wind_capacity
+
+        return production_levels
+
+    def forecast_energy_prices(self, num_intervals):
         """
         Forecast energy prices, by backcasting each corresponding
         hour of previous day.
 
         Parameters
         ----------
-        start : int
-            Index for starting period.
         num_intervals : int
             Number of time intervals for which to forecast prices.
         capacity_factors : bool, optional
@@ -259,13 +356,12 @@ class Bus309Backcaster(Forecaster):
             Wind production forecast for the next `num_intervals`
             hours.
         """
-        prices = self._forecast("LMP DA", start, num_intervals)
+        prices = self._forecast("LMP DA", num_intervals)
 
-        return prices.loc[0].values
+        return prices.mean(axis=0).values
 
     def forecast_wind_production(
             self,
-            start,
             num_intervals,
             capacity_factors=False,
             ):
@@ -274,8 +370,6 @@ class Bus309Backcaster(Forecaster):
 
         Parameters
         ----------
-        start : int
-            Index for starting period.
         num_intervals : int
             Number of time intervals for which to
         capacity_factors : bool, optional
@@ -289,8 +383,7 @@ class Bus309Backcaster(Forecaster):
             hours.
         """
         production_levels = self._forecast(
-            "Output DA Forecast",
-            start,
+            "Output DA",
             num_intervals,
         )
         production_forecast = production_levels.loc[0].values
@@ -300,13 +393,13 @@ class Bus309Backcaster(Forecaster):
         else:
             return production_forecast
 
-    def forecast_price_uncertainty(self, start, num_intervals):
+    def forecast_price_uncertainty(self, num_intervals):
         """Forecast uncertainty in LMPs.
 
         """
         # multiple scenarios
-        prices = self._forecast("LMP DA", start, num_intervals)
-        nom_prices = self.forecast_energy_prices(start, num_intervals)
+        prices = self._forecast("LMP DA", num_intervals)
+        nom_prices = self.forecast_energy_prices(num_intervals)
 
         # now generate the uncertainty set
         if self.lmp_set_class is None:
@@ -323,7 +416,6 @@ class Bus309Backcaster(Forecaster):
 
     def forecast_wind_uncertainty(
             self,
-            start,
             num_intervals,
             capacity_factors=False,
             ):
@@ -331,15 +423,13 @@ class Bus309Backcaster(Forecaster):
 
         """
         wind_production = self._forecast(
-            "Output DA Forecast",
-            start=start,
+            "Output DA",
             num_intervals=num_intervals,
         )
         if capacity_factors:
             wind_production /= self._wind_capacity
 
         sig_nom = self.forecast_wind_production(
-            start,
             num_intervals,
             capacity_factors=capacity_factors,
         )
@@ -364,7 +454,6 @@ class Bus309Backcaster(Forecaster):
             self,
             lmp_params,
             wind_params,
-            start,
             include_fixed_dims=True,
             nested=False,
             ):
@@ -379,7 +468,6 @@ class Bus309Backcaster(Forecaster):
 
         if self.lmp_set_class is not None:
             lmp_set = self.forecast_price_uncertainty(
-                start=start,
                 num_intervals=num_lmp_params,
             )
             lmp_params = lmp_set.get_uncertain_params(
@@ -392,7 +480,6 @@ class Bus309Backcaster(Forecaster):
 
         if self.wind_set_class is not None:
             wind_set = self.forecast_wind_uncertainty(
-                start=start,
                 num_intervals=num_wind_params,
             )
             wind_params = wind_set.get_uncertain_params(
@@ -416,7 +503,6 @@ class Bus309Backcaster(Forecaster):
 
     def get_joint_lmp_wind_pyros_set(
             self,
-            start,
             num_intervals,
             include_fixed_dims=True,
             capacity_factors=True,
@@ -426,23 +512,19 @@ class Bus309Backcaster(Forecaster):
         """
         if self.lmp_set_class is None:
             wind_set = self.forecast_wind_uncertainty(
-                start,
                 num_intervals,
             )
             return wind_set.pyros_set()
         elif self.wind_set_class is None:
             lmp_set = self.forecast_price_uncertainty(
-                start,
                 num_intervals,
             )
             return lmp_set.pyros_set()
         else:
             lmp_set = self.forecast_price_uncertainty(
-                start,
                 num_intervals,
             )
             wind_set = self.forecast_wind_uncertainty(
-                start,
                 num_intervals,
                 capacity_factors=capacity_factors,
             )
@@ -464,7 +546,6 @@ class Bus309Backcaster(Forecaster):
                     joint_bounds = self.get_uncertain_params(
                         lmp_bounds,
                         wind_bounds,
-                        start=start,
                         include_fixed_dims=include_fixed_dims,
                         nested=False,
                     )
@@ -479,7 +560,6 @@ class Bus309Backcaster(Forecaster):
                         joint_scenario = self.get_uncertain_params(
                             lmp_scenario,
                             wind_scenario,
-                            start=start,
                             include_fixed_dims=include_fixed_dims,
                             nested=False,
                         )
@@ -503,9 +583,10 @@ if __name__ == "__main__":
         wind_capacity=148.3,
         lmp_set_class_params=None,
         wind_set_class_params=None,
+        start=2000,
     )
-    lmp_set = forecaster.forecast_price_uncertainty(3990, 12)
-    # wind_set = forecaster.forecast_wind_uncertainty(4000, 12)
+    lmp_set = forecaster.forecast_price_uncertainty(12)
+    # wind_set = forecaster.forecast_wind_uncertainty(12)
 
     import matplotlib.pyplot as plt
     fig, ax = plt.subplots()
@@ -520,11 +601,9 @@ if __name__ == "__main__":
     params = forecaster.get_uncertain_params(
         lmp_params,
         wind_params,
-        4000,
         nested=True,
     )
     joint_set = forecaster.get_joint_lmp_wind_pyros_set(
-        start=100,
         num_intervals=24,
     )
 

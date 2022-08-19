@@ -979,7 +979,6 @@ def create_two_stg_wind_battery_model(
 def advance_time(
         model,
         forecaster,
-        start=0,
         battery_power_capacity=25e3,
         battery_energy_capacity=100e3,
         exclude_energy_throughputs=False,
@@ -1019,10 +1018,22 @@ def advance_time(
         through the `lmp_set_class` argument.
     """
     prediction_length = len(model.get_active_process_blocks())
-    current_time = model.current_time
-    # add 1 to start argument since current time not yet updated
+
+    # advance the forecaster
+    forecaster.advance_time()
+
+    # LMP for current model time now known.
+    # update to actual (most recent historical) value
+    model.pyomo_model.LMP[model.current_time] = (
+        forecaster.historical_energy_prices(forecaster.current_time - 1)
+    )[0]
+
+    # TODO: do we need to do same for wind capacity factor?
+    # what if actual capacity is lower than forecast?
+    # (solution may be infeasible ...?)
+
+    # get new wind capacity factors
     wind_cfs = forecaster.forecast_wind_production(
-        start=start + current_time + 1,
         num_intervals=prediction_length,
         capacity_factors=True,
     )
@@ -1072,11 +1083,9 @@ def advance_time(
     b_init.fs.battery.initial_energy_throughput.fix()
 
     prediction_length = len(model.get_active_process_blocks())
-    current_time = model.current_time
 
     # update LMP signal and model objective
     lmp_update_sig = forecaster.forecast_energy_prices(
-        start=current_time + start,
         num_intervals=prediction_length,
     )
     lmp_sig = {
@@ -1108,7 +1117,6 @@ def solve_rolling_horizon(
         model,
         forecaster,
         solver,
-        start,
         control_length,
         num_steps,
         output_dir=None,
@@ -1134,8 +1142,6 @@ def solve_rolling_horizon(
         `lmp_set_class` argument) as well.
     lmp_signal_filename : path-like
         Path to LMP signal data file.
-    start : int
-        Index of starting interval.
     control_length : int
         Control horizon length, i.e. number of periods
         for which the optimal settings in each period
@@ -1144,9 +1150,6 @@ def solve_rolling_horizon(
         Number of prediction horizons for which to solve the model.
         (One plus the number of times to update the
         active time periods/blocks.)
-    start : int
-        Starting index for the LMP signal extracted from the
-        data file at the path specified by `lmp_signal_filename`.
     output_dir : path-like, optional
         Path to directory to which output plots produced for each
         time step. The default is `None`, in which case no plots
@@ -1177,9 +1180,6 @@ def solve_rolling_horizon(
         dimensions for which the bounds are unequal in the PyROS
         solver calls. The default is `False`.
     """
-    # nonnegative start
-    assert start >= 0
-
     # cannot control beyond prediction horizon
     prediction_length = len(model.get_active_process_blocks())
     assert prediction_length >= control_length
@@ -1207,20 +1207,24 @@ def solve_rolling_horizon(
 
         assert prereq_args.issubset(kwargs_set)
         assert not kwargs_set.intersection(antireq_args)
-        assert lmp_set_class is not None
     else:
         assert "load_solutions" not in solver_kwargs
 
     # get LMP axis bounds for plotting
     if output_dir is not None:
-        if lmp_set_class is not None:
-            lmp_sets = list(
-                forecaster.forecast_price_uncertainty(
-                    start=start + idx,
-                    num_intervals=prediction_length,
+        if forecaster.lmp_set_class is not None:
+            temp_forecaster = forecaster.copy()
+
+            lmp_sets = []
+            for idx in range(0, num_steps):
+                lmp_sets.append(
+                    temp_forecaster.forecast_price_uncertainty(
+                        num_intervals=prediction_length,
+                    )
                 )
-                for idx in range(0, num_steps * control_length, control_length)
-            )
+                for tm in range(control_length):
+                    temp_forecaster.advance_time()
+
             max_ubs = list()
             min_lbs = list()
             for price_set in lmp_sets:
@@ -1236,21 +1240,16 @@ def solve_rolling_horizon(
                 min(min_lbs) - 5,
                 max(max_ubs) + 5,
             )
-        else:
-            lmp_bounds = (
-                min(lmp_signal) - 5,
-                max(lmp_signal) + 5,
-            )
 
     for idx in range(num_steps):
         if idx != 0:
-            # advance the model in time, extend LMP signal
+            # advance the model and forecaster in time,
+            # extend LMP signal,
             # and update the uncertainty set
             for step in range(control_length):
                 advance_time(
                     model,
                     forecaster,
-                    start=start,
                     exclude_energy_throughputs=exclude_energy_throughputs,
                     simplify_battery_power_limits=(
                         simplify_battery_power_limits
@@ -1278,12 +1277,10 @@ def solve_rolling_horizon(
             uncertain_params = forecaster.get_uncertain_params(
                 lmp_params,
                 wind_params,
-                start=start + model.current_time,
                 include_fixed_dims=not simplify_uncertainty_set,
                 nested=True,
             )
             uncertainty_set = forecaster.get_joint_lmp_wind_pyros_set(
-                start=start + model.current_time,
                 num_intervals=len(lmp_params),
                 include_fixed_dims=not simplify_uncertainty_set,
                 capacity_factors=True,
@@ -1366,7 +1363,6 @@ def solve_rolling_horizon(
                     if "LMP" in pname
                 ]
                 lmp_set = forecaster.forecast_price_uncertainty(
-                    start=start + model.current_time,
                     num_intervals=prediction_length,
                 )
                 if simplify_uncertainty_set:
@@ -1395,7 +1391,6 @@ def solve_rolling_horizon(
                 model,
                 highlight_active_periods=True,
                 lmp_set=forecaster.forecast_price_uncertainty(
-                    start=start + model.current_time,
                     num_intervals=prediction_length,
                 ),
                 output_dir=os.path.join(output_dir, f"step_{idx}"),
@@ -1467,8 +1462,8 @@ def perform_incidence_analysis(model):
 
 
 if __name__ == "__main__":
-    horizon = 12
-    num_steps = 24
+    horizon = 24
+    num_steps = 1
     start = 2000
     solve_pyros = True
     dr_order = 1
@@ -1496,7 +1491,9 @@ if __name__ == "__main__":
         lmp_set_class=lmp_set_class,
         wind_set_class=wind_set_class,
         wind_capacity=148.3,
+        start=start,
     )
+    ro_backcaster = backcaster.copy()
 
     # make directory for storing results
     base_dir = (
@@ -1515,11 +1512,9 @@ if __name__ == "__main__":
     # generate initial LMP and wind production level values
     # instantiate the model
     lmp_signal = backcaster.forecast_energy_prices(
-        start=start,
         num_intervals=horizon,
     )
     wind_cfs = backcaster.forecast_wind_production(
-        start=start,
         num_intervals=horizon,
         capacity_factors=True,
     )
@@ -1539,7 +1534,6 @@ if __name__ == "__main__":
         model,
         backcaster,
         solver,
-        start,
         1,
         num_steps,
         output_dir=os.path.join(
@@ -1553,13 +1547,13 @@ if __name__ == "__main__":
         simplify_uncertainty_set=simplify_uncertainty_set,
     )
 
-    pdb.set_trace()
+    # pdb.set_trace()
 
-    # create model
+    # set up RO model
     mdl = create_two_stg_wind_battery_model(
         lmp_signal,
         wind_cfs,
-        wind_capacity=backcaster.wind_capacity,
+        wind_capacity=ro_backcaster.wind_capacity,
         battery_capacity=25,
         exclude_energy_throughputs=excl_throughputs,
         simplify_battery_power_limits=simplify_battery_power_limits,
@@ -1580,16 +1574,15 @@ if __name__ == "__main__":
         solve_master_globally=True,
         keepfiles=True,
         load_solution=True,
-        output_verbose_results=False,
+        output_verbose_results=True,
         subproblem_file_directory=os.path.join(base_dir, "pyros_sublogs"),
     )
 
     # rolling horizon simulation of RO model
     solve_rolling_horizon(
         mdl,
-        backcaster,
+        ro_backcaster,
         pyros_solver,
-        start,
         1,
         num_steps,
         output_dir=os.path.join(base_dir, f"rolling_horizon_ro_dr_{dr_order}"),
