@@ -197,7 +197,7 @@ def plot_soc_results(
                 else None
             ),
             linewidth=1.8,
-            color="red",
+            color="blue",
             linestyle="dashed",
             alpha=alpha,
         )
