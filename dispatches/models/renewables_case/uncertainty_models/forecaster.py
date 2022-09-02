@@ -135,7 +135,7 @@ class Forecaster(abc.ABC):
         ...
 
 
-class Bus309Backcaster(Forecaster):
+class AbstractBus309Forecaster(Forecaster):
     """
     Backcaster for wind-battery models in which only the LMPs
     are taken to be uncertain.
@@ -337,62 +337,6 @@ class Bus309Backcaster(Forecaster):
 
         return production_levels
 
-    def forecast_energy_prices(self, num_intervals):
-        """
-        Forecast energy prices, by backcasting each corresponding
-        hour of previous day.
-
-        Parameters
-        ----------
-        num_intervals : int
-            Number of time intervals for which to forecast prices.
-        capacity_factors : bool, optional
-            Return capacity factors instead of wind production levels.
-            The default is False.
-
-        Returns
-        -------
-        production_forecast : (`num_intervals`,) numpy.ndarray
-            Wind production forecast for the next `num_intervals`
-            hours.
-        """
-        prices = self._forecast("LMP DA", num_intervals)
-
-        return prices.mean(axis=0).values
-
-    def forecast_wind_production(
-            self,
-            num_intervals,
-            capacity_factors=False,
-            ):
-        """
-        Forecast wind production levels.
-
-        Parameters
-        ----------
-        num_intervals : int
-            Number of time intervals for which to
-        capacity_factors : bool, optional
-            Return capacity factors instead of wind production levels.
-            The default is False.
-
-        Returns
-        -------
-        production_forecast : (`num_intervals`,) numpy.ndarray
-            Wind production forecast for the next `num_intervals`
-            hours.
-        """
-        production_levels = self._forecast(
-            "Output DA",
-            num_intervals,
-        )
-        production_forecast = production_levels.loc[0].values
-
-        if capacity_factors:
-            return production_forecast / self._wind_capacity
-        else:
-            return production_forecast
-
     def forecast_price_uncertainty(self, num_intervals):
         """Forecast uncertainty in LMPs.
 
@@ -574,8 +518,129 @@ class Bus309Backcaster(Forecaster):
             )
 
 
+class Perfect309Forecaster(AbstractBus309Forecaster):
+    """
+    Bus 309 forecaster with perfect information of the LMP
+    signals.
+    """
+
+    def forecast_energy_prices(self, num_intervals):
+        """
+        Forecast energy prices using perfect information.
+
+        Parameters
+        ----------
+        num_intervals : int
+            Number of time intervals for which to forecast prices.
+        capacity_factors : bool, optional
+            Return capacity factors instead of wind production levels.
+            The default is False.
+
+        Returns
+        -------
+        : (`num_intervals`,) numpy.ndarray
+            Wind production forecast for the next `num_intervals`
+            hours.
+        """
+        return self.historical_energy_prices(
+            [self.current_time + idx for idx in range(num_intervals)]
+        )
+
+    def forecast_wind_production(
+            self,
+            num_intervals,
+            capacity_factors=False,
+            ):
+        """
+        Forecast wind production levels.
+
+        Parameters
+        ----------
+        num_intervals : int
+            Number of time intervals for which to
+        capacity_factors : bool, optional
+            Return capacity factors instead of wind production levels.
+            The default is False.
+
+        Returns
+        -------
+        production_forecast : (`num_intervals`,) numpy.ndarray
+            Wind production forecast for the next `num_intervals`
+            hours.
+        """
+        return self.historical_wind_production(
+            [self.current_time + idx for idx in range(num_intervals)],
+            capacity_factors=capacity_factors,
+        )
+
+
+class AvgSample309Backcaster(AbstractBus309Forecaster):
+    """
+    Bus 309 forecaster for which point forecast of LMP and
+    wind production signals for each hour of the day is
+    obtained by averaging prices for each hour of the day
+    for the previous `n_prev_days` days.
+    """
+
+    def forecast_energy_prices(self, num_intervals):
+        """
+        Forecast energy prices, by backcasting each corresponding
+        hour of previous day.
+
+        Parameters
+        ----------
+        num_intervals : int
+            Number of time intervals for which to forecast prices.
+        capacity_factors : bool, optional
+            Return capacity factors instead of wind production levels.
+            The default is False.
+
+        Returns
+        -------
+        production_forecast : (`num_intervals`,) numpy.ndarray
+            Wind production forecast for the next `num_intervals`
+            hours.
+        """
+        prices = self._forecast("LMP DA", num_intervals)
+
+        return prices.mean(axis=0).values
+
+    def forecast_wind_production(
+            self,
+            num_intervals,
+            capacity_factors=False,
+            ):
+        """
+        Forecast wind production levels.
+
+        Parameters
+        ----------
+        num_intervals : int
+            Number of time intervals for which to
+        capacity_factors : bool, optional
+            Return capacity factors instead of wind production levels.
+            The default is False.
+
+        Returns
+        -------
+        production_forecast : (`num_intervals`,) numpy.ndarray
+            Wind production forecast for the next `num_intervals`
+            hours.
+        """
+        production_levels = self._forecast(
+            "Output DA",
+            num_intervals,
+        )
+        production_forecast = production_levels.loc[0].values
+
+        if capacity_factors:
+            return production_forecast / self._wind_capacity
+        else:
+            return production_forecast
+
+
 if __name__ == "__main__":
-    forecaster = Bus309Backcaster(
+    forecaster = Perfect309Forecaster(
         "../../../../../results/wind_profile_data/309_wind_1_profiles.csv",
         n_prev_days=7,
         lmp_set_class=CustomBoundsLMPBoxSet,

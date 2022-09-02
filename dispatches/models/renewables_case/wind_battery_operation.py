@@ -1462,8 +1462,8 @@ def perform_incidence_analysis(model):
 
 
 if __name__ == "__main__":
-    horizon = 24
-    num_steps = 1
+    horizon = 12
+    num_steps = 24
     start = 2000
     solve_pyros = True
     dr_order = 1
@@ -1480,12 +1480,12 @@ if __name__ == "__main__":
     from dispatches.models.renewables_case.uncertainty_models.\
         lmp_uncertainty_models import CustomBoundsLMPBoxSet
     from dispatches.models.renewables_case.uncertainty_models.\
-        forecaster import Bus309Backcaster
+        forecaster import Perfect309Forecaster
 
     # set up backcaster for wind and LMP uncertainty
     lmp_set_class = CustomBoundsLMPBoxSet
     wind_set_class = None
-    backcaster = Bus309Backcaster(
+    backcaster = Perfect309Forecaster(
         "../../../../results/wind_profile_data/309_wind_1_profiles.csv",
         n_prev_days=7,
         lmp_set_class=lmp_set_class,
@@ -1497,8 +1497,9 @@ if __name__ == "__main__":
 
     # make directory for storing results
     base_dir = (
-        f"../../../../results/new_wind_lmp_results/hor_{horizon}_start_"
-        f"{start}_steps_{num_steps}"
+        f"../../../../results/new_wind_lmp_results/"
+        f"hor_{horizon}_start_{start}_steps_{num_steps}/"
+        f"{backcaster.__class__.__name__}"
     )
     os.makedirs(base_dir, exist_ok=True)
 
@@ -1547,7 +1548,7 @@ if __name__ == "__main__":
         simplify_uncertainty_set=simplify_uncertainty_set,
     )
 
-    # pdb.set_trace()
+    pdb.set_trace()
 
     # set up RO model
     mdl = create_two_stg_wind_battery_model(
