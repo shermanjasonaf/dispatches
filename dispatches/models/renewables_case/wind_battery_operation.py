@@ -17,6 +17,7 @@ import logging
 import numpy as np
 from numpy.linalg import det
 import matplotlib.pyplot as plt
+import pandas as pd
 
 import pyomo.environ as pyo
 import pyomo.contrib.pyros as pyros
@@ -576,9 +577,10 @@ def construct_profit_obj(model, lmp_signal):
     ----------
     model : MultiPeriodModel
         Model of interest.
-    lmp_signal : array-like
-        LMP signal. Must contain as many entries are there are
-        process blocks in the model.
+    lmp_signal : (M,) array-like
+        Energy prices (LMPs) in $/MWh. The number of entries `M`
+        in the array must be equal to the number of process
+        blocks in the model.
     """
     horizon = len(lmp_signal)
     pyomo_model = model.pyomo_model
@@ -606,7 +608,7 @@ def construct_profit_obj(model, lmp_signal):
         pyomo_model.Horizon,
         initialize=lmp_signal,
         mutable=True,
-        doc="Locational marginal prices, $/kWh",
+        doc="Locational marginal prices, $/MWh",
         units=1/pyo.units.MWh,
     )
 
@@ -625,7 +627,7 @@ def construct_profit_obj(model, lmp_signal):
         b = m.blocks[t].process
         return b.fs.windpower.op_total_cost / u.kW / u.h
 
-    @pyomo_model.Objective(doc="Total profit ($/hr)", sense=pyo.maximize)
+    @pyomo_model.Objective(doc="Total profit ($)", sense=pyo.maximize)
     def profit_obj(m):
         profit = 0
         for t, blk in pyomo_model.blocks.items():
@@ -728,7 +730,7 @@ def evaluate_objective(
         The default is `None`, in which case
         the index of the last active process block is used.
     lmp_signal : array-like, optional
-        LMP values ($/kWh) against which to evaluate the
+        LMP values ($/MWh) against which to evaluate the
         objective. The default is `None`, in which case the
         values are taken from `model.pyomo_model.LMP`.
         If an array is provided, then the array must contain
@@ -739,7 +741,7 @@ def evaluate_objective(
     : tuple
         A 3-tuple consisting of the total revenue, operating
         cost, and profit (revenue - cost), in that order, in
-        $/hr.
+        dollars ($).
     """
     start = mp_model.current_time if start is None else start
     stop = (
@@ -907,24 +909,39 @@ def create_two_stg_wind_battery_model(
         discharging_eta=None,
         ):
     """
-    Create a two-stage surrogate of the multi-stage
-    wind battery model.
+    Create a multiperiod wind-battery model.
 
     Parameters
     ----------
     lmp_signal : array-like
         LMP signal, of which the number of entries is equal
         to the model's prediction horizon length.
+    wind_cfs : dict
+        Wind production capacity factors for each period.
+        Maps period indices to wind capacity factors.
+    wind_capacity : float
+        Wind production system capacity (design capacity)
+        in MW.
+    battery_capacity : float
+        Battery storage capacity in MW.
     exclude_energy_throughputs : bool, optional
         Exclude net energy throughputs from model.
         (By fixing values to zero and deactivating energy
-        throughput update constraints). The default is
-        `False`.
+        throughput update constraints).
+    simplify_battery_power_limits : bool, optional
+        Simplify constraints limiting power flows through
+        the battery (this is meant to make RO with PyROS
+        more efficient).
+    charging_eta : float or None, optional
+        Battery charging efficiency. Must be a value in (0, 1].
+    discharging_eta : float or None, optional
+        Battery discharging efficiency. Must be a value in (0, 1].
 
     Returns
     -------
     model : MultiPeriodModel
-        Model.
+        Multi-period wind battery model, equipped with an
+        economic objective.
     """
     horizon = len(lmp_signal)
 
@@ -979,21 +996,21 @@ def create_two_stg_wind_battery_model(
 def advance_time(
         model,
         forecaster,
-        battery_power_capacity=25e3,
-        battery_energy_capacity=100e3,
+        battery_power_capacity=25,
+        battery_energy_capacity=100,
         exclude_energy_throughputs=False,
         simplify_battery_power_limits=False,
         charging_eta=None,
         discharging_eta=None,
         ):
     """
-    Advance model instance to next time period, and
-    construct an updated uncertainty set.
+    Advance multi-period wind-battery model to next time period,
+    and construct an updated uncertainty set.
 
     Parameters
     ----------
     model : MultiPeriodModel
-        Model of interest.
+        Wind-battery model of interest.
     new_lmp_sig : array-like
         LMP signal values for next prediction horizon.
         The number of entries must be equal to the
@@ -1005,17 +1022,11 @@ def advance_time(
     lmp_set_class_params : dict, optional
         Keyword arguments to the LMP uncertainty set constructor.
     wind_capacity : float, optional
-        Wind production capacity.
+        Wind production capacity (in MWh).
     battery_power_capacity : float, optional
-        Battery power capacity.
+        Battery power capacity (in MW).
     battery_energy_capacity : float, optional
-        Battery energy capacity.
-
-    Returns
-    -------
-    : LMPBoxSet
-        An updated LMP uncertainty set, if a constructor is provided
-        through the `lmp_set_class` argument.
+        Battery energy capacity (in MWh).
     """
     prediction_length = len(model.get_active_process_blocks())
 
@@ -1060,9 +1071,10 @@ def advance_time(
     b = model.get_active_process_blocks()[-1]
 
     # transform latest block to operation mode
-    b.fs.windpower.system_capacity.fix(forecaster.wind_capacity)
-    b.fs.battery.nameplate_power.fix(battery_power_capacity)
-    b.fs.battery.nameplate_energy.fix(battery_energy_capacity)
+    # note: forecaster wind capacity converted from MW to kW
+    b.fs.windpower.system_capacity.fix(forecaster.wind_capacity * 1e3)
+    b.fs.battery.nameplate_power.fix(battery_power_capacity * 1e3)
+    b.fs.battery.nameplate_energy.fix(battery_energy_capacity * 1e3)
     b.periodic_constraints[0].deactivate()
 
     # simplifications to constraints on battery power flows/levels
@@ -1107,8 +1119,15 @@ def advance_time(
 
 def update_wind_capacity_factors(model, new_factors):
     """
-    Update model wind capacity factors.
+    Update wind production capacity factor values for active
+    model process blocks.
+
+    Parameters
+    ----------
+    new_factors : list(float)
+        Wind production capacity factors.
     """
+    assert len(model.get_active_process_blocks()) == len(new_factors)
     for blk, cf in zip(model.get_active_process_blocks(), new_factors):
         blk.fs.windpower.capacity_factor[0].set_value(cf)
 
@@ -1134,51 +1153,60 @@ def solve_rolling_horizon(
     ----------
     model : MultiPeriodModel
         Model of interest.
+    forecaster : uncertainty_models.Forecaster
+        Predictor for LMPs and wind production capacities
+        and the uncertainty in these forecasts.
     solver : pyomo SolverFactory object
         Optimizer used for the Pyomo model.
-        PyROS (`pyo.SolverFactory('pyros')`) may be provided
-        as a multi-stage RO solver, but in this case,
+        PyROS (`pyomo.environ.SolverFactory('pyros')`) may be
+        provided as a two-stage RO solver, but in this case,
         an uncertainty set class must be provided (through the
         `lmp_set_class` argument) as well.
-    lmp_signal_filename : path-like
-        Path to LMP signal data file.
     control_length : int
         Control horizon length, i.e. number of periods
         for which the optimal settings in each period
         are actually used.
     num_steps : int
         Number of prediction horizons for which to solve the model.
-        (One plus the number of times to update the
-        active time periods/blocks.)
-    output_dir : path-like, optional
-        Path to directory to which output plots produced for each
-        time step. The default is `None`, in which case no plots
+        (I.e., the number of times to update the active
+        time periods/blocks.)
+    output_dir : path-like or None, optional
+        Path to directory to which output plots and results
+        produced for each time step.
+        If `None` is provided, then no plots
         are produced. If a path is provided, plots are generated,
         and exported to this directory.
-    lmp_set_class : class, optional
-        Class to use for generating uncertainty in the LMP's.
-    lmp_set_kwargs : dict, optional
-        Keyword arguments to the LMP uncertainty set class's
-        constructor method.
     solver_kwargs : dict, optional
         Keyword arguments to the method `solver.solve()`.
-    charging_eta : float, optional
-        Battery charging efficiency. Default is `None`,
-        in which case the values already present in the model are
-        used.
-    discharging_eta : float, optional
-        Battery discharging efficiency. Default is `None`,
-        in which case the values already present in the model are
-        used.
+    charging_eta : float or None, optional
+        Battery charging efficiency. The charging efficiency
+        for every process block is set to this value (if a float is
+        provided). If `None` is provided, then the charging
+        efficiencies are not set.
+    discharging_eta : float or None, optional
+        Battery discharging efficiency. The charging efficiency
+        for every process block is set to this value (if a float is
+        provided). If `None` is provided, then the charging
+        efficiencies are not set.
     exclude_energy_throughputs : bool, optional
         Exclude battery energy throughputs from the model,
         by fixing all to 0 and deactivating the throughput
         update constraints and constraints linking throughputs
         across periods. The default is `False`.
-    simplify_lmp_set : bool, optional
+    simplify_battery_power_limits : bool, optional
+        Simplify constraints limiting power flows through
+        the battery.
+    simplify_uncertainty_set : bool, optional
         Simplify LMP uncertainty set by including only the
         dimensions for which the bounds are unequal in the PyROS
         solver calls. The default is `False`.
+
+    Returns
+    -------
+    accumul_results_df : pandas.DataFrame
+        A `DataFrame` consisting of the realized energy price ($/MWh),
+        along with the operating revenue, cost, and profit (all in $)
+        for every time period adapted.
     """
     # cannot control beyond prediction horizon
     prediction_length = len(model.get_active_process_blocks())
@@ -1241,23 +1269,23 @@ def solve_rolling_horizon(
                 max(max_ubs) + 5,
             )
 
-    for idx in range(num_steps):
-        if idx != 0:
-            # advance the model and forecaster in time,
-            # extend LMP signal,
-            # and update the uncertainty set
-            for step in range(control_length):
-                advance_time(
-                    model,
-                    forecaster,
-                    exclude_energy_throughputs=exclude_energy_throughputs,
-                    simplify_battery_power_limits=(
-                        simplify_battery_power_limits
-                    ),
-                    charging_eta=charging_eta,
-                    discharging_eta=discharging_eta,
-                )
+    m_idx = pd.MultiIndex.from_tuples(
+        (step, forecaster.current_time + step * control_length + subperiod)
+        for step in range(num_steps)
+        for subperiod in range(control_length)
+    )
+    m_idx.names = ["step", "forecaster period no."]
+    accumul_results_df = pd.DataFrame(
+        index=m_idx,
+        columns=[
+            "Energy Price ($/MWh)",
+            "Revenue ($/hr)",
+            "Cost ($/hr)",
+            "Profit ($/hr)",
+        ],
+    )
 
+    for idx in range(num_steps):
         # solve the model
         if is_pyros:
             first_stage_vars, second_stage_vars = get_dof_vars(
@@ -1402,6 +1430,34 @@ def solve_rolling_horizon(
                 custom_lmp_vals=custom_lmp_vals,
             )
 
+        # advance the model and forecaster in time,
+        # extend LMP signal,
+        # and update the uncertainty set
+        for step in range(control_length):
+            advance_time(
+                model,
+                forecaster,
+                exclude_energy_throughputs=exclude_energy_throughputs,
+                simplify_battery_power_limits=(
+                    simplify_battery_power_limits
+                ),
+                charging_eta=charging_eta,
+                discharging_eta=discharging_eta,
+            )
+            accumul_results_df.loc[idx, forecaster.current_time - 1] = (
+                (pyo.value(model.pyomo_model.LMP[model.current_time - 1]),)
+                + evaluate_objective(
+                    model,
+                    start=model.current_time - 1,
+                    stop=model.current_time - 1,
+                )
+            )
+
+    if output_dir is not None:
+        accumul_results_df.to_csv(os.path.join(output_dir, "revenues.csv"))
+
+    return accumul_results_df
+
 
 def perform_incidence_analysis(model):
     """
@@ -1475,17 +1531,17 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
     import sys
-    sys.setrecursionlimit(2000)
+    sys.setrecursionlimit(15000)
 
     from dispatches.models.renewables_case.uncertainty_models.\
         lmp_uncertainty_models import CustomBoundsLMPBoxSet
     from dispatches.models.renewables_case.uncertainty_models.\
-        forecaster import Perfect309Forecaster
+        forecaster import AvgSample309Backcaster
 
     # set up backcaster for wind and LMP uncertainty
     lmp_set_class = CustomBoundsLMPBoxSet
     wind_set_class = None
-    backcaster = Perfect309Forecaster(
+    backcaster = AvgSample309Backcaster(
         "../../../../results/wind_profile_data/309_wind_1_profiles.csv",
         n_prev_days=7,
         lmp_set_class=lmp_set_class,

@@ -42,6 +42,12 @@ class Forecaster(abc.ABC):
         Forecast (nominal) energy prices (LMPs) for the next
         `number_periods` time intervals, including the
         current period.
+
+        Returns
+        -------
+        (`number_periods`,) array_like
+            Energy price forecast ($/MWh) for next `number_periods`
+            periods.
         """
         ...
 
@@ -65,8 +71,13 @@ class Forecaster(abc.ABC):
 
         Parameters
         ----------
-        periods : array_like
+        periods : (N,) array_like
             Periods for which to provide historical prices.
+
+        Returns
+        -------
+        : (N,) array_like
+            Historical energy prices, in $/MWh.
         """
         ...
 
@@ -78,11 +89,17 @@ class Forecaster(abc.ABC):
 
         Parameters
         ----------
-        periods : array_like
+        periods : (M,) array_like
             Periods for which to provide historical prices.
         capacity_factors : bool, optional
             Provide capacity factors instead of wind production
             levels. The default is `False`.
+
+        Returns
+        -------
+        : (N,) array_like
+            If `capacity_factors` is True, historical wind capacity
+            factors. Otherwise, wind production capacities in MW.
         """
         ...
 
@@ -92,6 +109,12 @@ class Forecaster(abc.ABC):
         Forecast (nominal) wind generation capacities for the
         next `number_periods` time intervals, including
         the current period.
+
+        Returns
+        -------
+        array_like
+            A sequence of length equal to the number of periods
+            of the wind production levels, in MW.
         """
         ...
 
@@ -100,15 +123,28 @@ class Forecaster(abc.ABC):
         """
         Forecast uncertainty in the LMPs for the next `number_periods`
         time intervals, including the current period.
+
+        Returns
+        -------
+        : uncertainty_models.UncertaintySet
+            Quantification of uncertainty in energy prices for the
+            next `number_periods` periods, in units of $/MWh.
         """
         ...
 
     @abc.abstractmethod
     def forecast_wind_uncertainty(self, number_periods):
         """
-        Forecast uncertainty in the wind prodution levels for the
+        Forecast uncertainty in the wind prodution capacities for the
         next `number_periods` time intervals, including the current
         period.
+
+        Returns
+        -------
+        : uncertainty_models.UncertaintySet
+            Quantification of uncertainty in wind production
+            capacity forecasts for next `number_periods` periods,
+            in units of MW.
         """
         ...
 
@@ -153,7 +189,7 @@ class AbstractBus309Forecaster(Forecaster):
         An `UncertaintySet` subclass used for predicting uncertainty
         in the wind production levels.
     wind_capacity : float or int, optional
-        Nameplate wind production capacity.
+        Nameplate wind production capacity, in MW.
     lmp_set_class_params : dict or None, optional
         Optional parameters for the LMP uncertainty prediction.
         Default is `None`.
@@ -239,6 +275,7 @@ class AbstractBus309Forecaster(Forecaster):
 
     @property
     def wind_capacity(self):
+        """Wind capacity, in MW."""
         return self._wind_capacity
 
     @wind_capacity.setter
@@ -246,7 +283,9 @@ class AbstractBus309Forecaster(Forecaster):
         raise AttributeError("Cannot set attribute `wind_capacity`")
 
     def _forecast(self, column_name, num_intervals):
-        """Backcast energy prices.
+        """
+        Generate forecast of the quantity corresponding to
+        a given column name using a backcasting algorithm.
 
         Parameters
         ----------
@@ -290,7 +329,7 @@ class AbstractBus309Forecaster(Forecaster):
 
     def historical_energy_prices(self, periods):
         """
-        Get historical energy price data.
+        Get historical energy price data (in $/MWh).
 
         Parameters
         ----------
@@ -302,7 +341,8 @@ class AbstractBus309Forecaster(Forecaster):
         Returns
         -------
         : numpy.ndarray
-            Historical energy prices for the specified periods.
+            Historical energy prices for the specified periods
+            in $/MWh.
         """
         if isinstance(periods, int):
             periods = [periods]
@@ -310,11 +350,11 @@ class AbstractBus309Forecaster(Forecaster):
 
     def historical_wind_production(self, periods, capacity_factors=False):
         """
-        Get historical wind production level data.
+        Get historical wind production capacity data.
 
         Parameters
         ----------
-        periods : int or array_like
+        periods : int or (N,) array_like
             Indexes of periods for which to collect
             historical data. All must correspond
             to periods preceding the current time.
@@ -324,8 +364,9 @@ class AbstractBus309Forecaster(Forecaster):
 
         Returns
         -------
-        : numpy.ndarray
-            Historical wind production levels/capacity factors
+        : (N,) numpy.ndarray
+            If `capacity_factors` is `True`, wind production capacity
+            factors. Else, historical wind production capacities in MW
             for the specified periods.
         """
         if isinstance(periods, int):
@@ -404,6 +445,34 @@ class AbstractBus309Forecaster(Forecaster):
         """
         Get uncertain parameters and organize by problem stage
         (if returning nested list).
+
+        Parameters
+        ----------
+        lmp_params : list(object)
+            Objects used to model the LMPs. The length
+            of this list signifies the number of periods ahead
+            of `current_time` under consideration.
+        wind_params : list(object)
+            Objects used to model the wind capacity factors.
+            Must be of same length as `lmp_params`.
+        include_fixed_dims : bool, optional
+            Include objects corresponding to dimensions of the
+            uncertainty set which are 'fixed' by virtue of the
+            bounds on the parameter values calculated for that
+            dimension.
+        nested : bool, optional
+            Nest the uncertain parameters by decision-making
+            stage (in a multi-stage optimization under uncertainty
+            context). One decision making stage generally corresponds
+            to a time period.
+
+        Returns
+        -------
+        : list
+            If `nested`, a list of objects in the order
+            corresponding to the parameters modeled by the
+            uncertainty set. Otherwise, a nested list of
+            the objects, organized by decision-making stage.
         """
         num_lmp_params = len(lmp_params)
         num_wind_params = len(wind_params)
@@ -453,6 +522,11 @@ class AbstractBus309Forecaster(Forecaster):
             ):
         """Get joint LMP and wind PyROS uncertainty set.
 
+        Returns
+        -------
+        pyomo.contrib.pyros.UncertaintySet
+            Quantification of uncertainty in energy prices
+            (in $/MWh) and wind capacity factors.
         """
         if self.lmp_set_class is None:
             wind_set = self.forecast_wind_uncertainty(
@@ -526,7 +600,7 @@ class Perfect309Forecaster(AbstractBus309Forecaster):
 
     def forecast_energy_prices(self, num_intervals):
         """
-        Forecast energy prices using perfect information.
+        Forecast energy prices ($/MWh) using perfect information.
 
         Parameters
         ----------
@@ -539,8 +613,7 @@ class Perfect309Forecaster(AbstractBus309Forecaster):
         Returns
         -------
         : (`num_intervals`,) numpy.ndarray
-            Wind production forecast for the next `num_intervals`
-            hours.
+            Energy prices ($/MWh)
         """
         return self.historical_energy_prices(
             [self.current_time + idx for idx in range(num_intervals)]
@@ -565,8 +638,9 @@ class Perfect309Forecaster(AbstractBus309Forecaster):
         Returns
         -------
         production_forecast : (`num_intervals`,) numpy.ndarray
-            Wind production forecast for the next `num_intervals`
-            hours.
+            If `capacity_factors` is `True`, wind production capacity
+            factors forecast for next `num_intervals` periods.
+            Else, wind production capacities in MW.
         """
         return self.historical_wind_production(
             [self.current_time + idx for idx in range(num_intervals)],
@@ -576,16 +650,17 @@ class Perfect309Forecaster(AbstractBus309Forecaster):
 
 class AvgSample309Backcaster(AbstractBus309Forecaster):
     """
-    Bus 309 forecaster for which point forecast of LMP and
-    wind production signals for each hour of the day is
+    Bus 309 forecaster for which point forecast of LMP is
     obtained by averaging prices for each hour of the day
-    for the previous `n_prev_days` days.
+    for a specified number of previous operating days.
+    Wind production capacities are assumed to be known
+    with perfect information.
     """
 
     def forecast_energy_prices(self, num_intervals):
         """
-        Forecast energy prices, by backcasting each corresponding
-        hour of previous day.
+        Forecast energy prices ($/MWh), by backcasting each
+        corresponding hour of previous day.
 
         Parameters
         ----------
@@ -598,8 +673,8 @@ class AvgSample309Backcaster(AbstractBus309Forecaster):
         Returns
         -------
         production_forecast : (`num_intervals`,) numpy.ndarray
-            Wind production forecast for the next `num_intervals`
-            hours.
+            Energy price forecast ($/MWh) for the next `num_intervals`
+            time periods.
         """
         prices = self._forecast("LMP DA", num_intervals)
 
@@ -624,19 +699,14 @@ class AvgSample309Backcaster(AbstractBus309Forecaster):
         Returns
         -------
         production_forecast : (`num_intervals`,) numpy.ndarray
-            Wind production forecast for the next `num_intervals`
-            hours.
+            If `capacity_factors` is `True`, wind production capacity
+            factors forecast for next `num_intervals` periods.
+            Else, wind production capacities in MW.
         """
-        production_levels = self._forecast(
-            "Output DA",
-            num_intervals,
+        return self.historical_wind_production(
+            [self.current_time + idx for idx in range(num_intervals)],
+            capacity_factors=capacity_factors,
         )
-        production_forecast = production_levels.loc[0].values
-
-        if capacity_factors:
-            return production_forecast / self._wind_capacity
-        else:
-            return production_forecast
 
 
 if __name__ == "__main__":
