@@ -1525,25 +1525,33 @@ def main():
     from dispatches.models.renewables_case.uncertainty_models.\
         lmp_uncertainty_models import CustomBoundsLMPBoxSet
     from dispatches.models.renewables_case.uncertainty_models.\
-        forecaster import AvgSample309Backcaster
+        forecaster import Perfect309Forecaster
 
+    # horizon lengths
     horizon = 12
     num_steps = 24
+    control_length = 1
+
+    # starting point for dataset used to instantiate forecaster
     start = 2000
-    dr_order = 1
+
+    # model settings
     charging_eff = 0.95
     excl_throughputs = True
     simplify_battery_power_limits = True
     simplify_uncertainty_set = False
 
-    logging.basicConfig(level=logging.INFO)
+    # pyros solver setting
+    dr_order = 1
 
+    # configure system
+    logging.basicConfig(level=logging.INFO)
     sys.setrecursionlimit(15000)
 
     # set up backcaster for wind and LMP uncertainty
     lmp_set_class = CustomBoundsLMPBoxSet
     wind_set_class = None
-    backcaster = AvgSample309Backcaster(
+    backcaster = Perfect309Forecaster(
         "../../../../results/wind_profile_data/309_wind_1_profiles.csv",
         n_prev_days=7,
         lmp_set_class=lmp_set_class,
@@ -1593,7 +1601,7 @@ def main():
         model=model,
         forecaster=backcaster,
         solver=solver,
-        control_length=1,
+        control_length=control_length,
         num_steps=num_steps,
         output_dir=os.path.join(
             base_dir,
@@ -1642,7 +1650,7 @@ def main():
         model=mdl,
         forecaster=ro_backcaster,
         solver=pyros_solver,
-        control_length=1,
+        control_length=control_length,
         num_steps=num_steps,
         output_dir=os.path.join(base_dir, f"rolling_horizon_ro_dr_{dr_order}"),
         charging_eta=charging_eff,
