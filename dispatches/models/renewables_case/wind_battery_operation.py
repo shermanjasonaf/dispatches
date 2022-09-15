@@ -1517,11 +1517,19 @@ def perform_incidence_analysis(model):
     print("Jacobian determinant", det(jacarr))
 
 
-if __name__ == "__main__":
+def main():
+    """
+    Script for running the present module if main.
+    """
+    import sys
+    from dispatches.models.renewables_case.uncertainty_models.\
+        lmp_uncertainty_models import CustomBoundsLMPBoxSet
+    from dispatches.models.renewables_case.uncertainty_models.\
+        forecaster import AvgSample309Backcaster
+
     horizon = 12
     num_steps = 24
     start = 2000
-    solve_pyros = True
     dr_order = 1
     charging_eff = 0.95
     excl_throughputs = True
@@ -1530,13 +1538,7 @@ if __name__ == "__main__":
 
     logging.basicConfig(level=logging.INFO)
 
-    import sys
     sys.setrecursionlimit(15000)
-
-    from dispatches.models.renewables_case.uncertainty_models.\
-        lmp_uncertainty_models import CustomBoundsLMPBoxSet
-    from dispatches.models.renewables_case.uncertainty_models.\
-        forecaster import AvgSample309Backcaster
 
     # set up backcaster for wind and LMP uncertainty
     lmp_set_class = CustomBoundsLMPBoxSet
@@ -1576,8 +1578,8 @@ if __name__ == "__main__":
         capacity_factors=True,
     )
     model = create_two_stg_wind_battery_model(
-        lmp_signal,
-        wind_cfs,
+        lmp_signal=lmp_signal,
+        wind_cfs=wind_cfs,
         wind_capacity=backcaster.wind_capacity,
         battery_capacity=25,
         exclude_energy_throughputs=excl_throughputs,
@@ -1588,11 +1590,11 @@ if __name__ == "__main__":
 
     # perform rolling horizon simulation of deterministic model
     solve_rolling_horizon(
-        model,
-        backcaster,
-        solver,
-        1,
-        num_steps,
+        model=model,
+        forecaster=backcaster,
+        solver=solver,
+        control_length=1,
+        num_steps=num_steps,
         output_dir=os.path.join(
             base_dir,
             "rolling_horizon_deterministic",
@@ -1608,8 +1610,8 @@ if __name__ == "__main__":
 
     # set up RO model
     mdl = create_two_stg_wind_battery_model(
-        lmp_signal,
-        wind_cfs,
+        lmp_signal=lmp_signal,
+        wind_cfs=wind_cfs,
         wind_capacity=ro_backcaster.wind_capacity,
         battery_capacity=25,
         exclude_energy_throughputs=excl_throughputs,
@@ -1637,11 +1639,11 @@ if __name__ == "__main__":
 
     # rolling horizon simulation of RO model
     solve_rolling_horizon(
-        mdl,
-        ro_backcaster,
-        pyros_solver,
-        1,
-        num_steps,
+        model=mdl,
+        forecaster=ro_backcaster,
+        solver=pyros_solver,
+        control_length=1,
+        num_steps=num_steps,
         output_dir=os.path.join(base_dir, f"rolling_horizon_ro_dr_{dr_order}"),
         charging_eta=charging_eff,
         discharging_eta=charging_eff,
@@ -1651,3 +1653,7 @@ if __name__ == "__main__":
         solver_kwargs=pyros_kwargs,
     )
     pdb.set_trace()
+
+
+if __name__ == "__main__":
+    main()
