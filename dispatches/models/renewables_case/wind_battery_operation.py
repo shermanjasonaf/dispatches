@@ -1523,23 +1523,30 @@ def main():
     """
     import sys
     from dispatches.models.renewables_case.uncertainty_models.\
-        lmp_uncertainty_models import CustomBoundsLMPBoxSet
+        lmp_uncertainty_models import (
+            CustomBoundsLMPBoxSet,
+            ConstantFractionalUncertaintyBoxSet,
+        )
     from dispatches.models.renewables_case.uncertainty_models.\
-        forecaster import Perfect309Forecaster
+        forecaster import Perfect309Forecaster, AvgSample309Backcaster
 
     # horizon lengths
     horizon = 12
     num_steps = 24
     control_length = 1
 
-    # starting point for dataset used to instantiate forecaster
-    start = 2000
-
     # model settings
     charging_eff = 0.95
     excl_throughputs = True
     simplify_battery_power_limits = True
     simplify_uncertainty_set = False
+
+    # settings for modifying dataset and forecasting
+    start = 2000
+    lmp_incr_frac = 0
+    perfect_information = False
+    use_fractional_box_set = True
+    fractional_box_set_params = {"fractional_uncertainty": 0.1}
 
     # pyros solver setting
     dr_order = 1
@@ -1548,24 +1555,107 @@ def main():
     logging.basicConfig(level=logging.INFO)
     sys.setrecursionlimit(15000)
 
-    # set up backcaster for wind and LMP uncertainty
-    lmp_set_class = CustomBoundsLMPBoxSet
-    wind_set_class = None
-    backcaster = Perfect309Forecaster(
+    # determine forecaster class
+    if perfect_information:
+        forecaster_class = Perfect309Forecaster
+    else:
+        forecaster_class = AvgSample309Backcaster
+
+    def frac_to_string(frac, prefix="", postfix=""):
+        """
+        Convert fractional floating point value to string
+        of form '{prefix}{sign}_0pt{decimal_places}{postfix}', where
+        {sign} is 'pl' or 'mn' (depending on sign of fraction).
+        """
+        assert -1 < frac
+        assert frac < 1
+
+        if frac == 0:
+            increment_str = ""
+        else:
+            if frac > 0:
+                sign_str = "pl_"
+            else:
+                sign_str = "mn_"
+
+            # remove +/- sign. Replace decimal point with 'pt'
+            num_str = (
+                str(frac)
+                .replace("-", "")
+                .replace("+", "")
+                .replace(".", "pt")
+            )
+
+            # now put everything together
+            increment_str = prefix + sign_str + num_str + postfix
+
+        return increment_str
+
+    def create_wind_lmp_dataset(base_dataset_file_path, lmp_increment_frac):
+        """
+        Create new wind/data LMP dataset from file and return
+        path to that file. If `lmp_increment_frac` is 0,
+        then no new file is created, and `base_dataset_file_path`
+        is returned.
+        """
+
+        if lmp_incr_frac == 0:
+            # don't need to create new dataset
+            new_df_path = base_dataset_file_path
+        else:
+            # create new dataset file path
+            increment_str = frac_to_string(lmp_increment_frac, prefix="_")
+            new_df_path = (
+                base_dataset_file_path.split(".csv")[0]
+                + increment_str
+                + ".csv"
+            )
+
+            # open base dataset, copy, and create LMPs
+            df = pd.read_csv(base_dataset_file_path)
+            df["LMP DA"] += lmp_increment_frac * abs(df["LMP DA"])
+            df.to_csv(new_df_path)
+
+            logging.info(
+                "Successfully wrote new dataset to spreadsheet "
+                f"{new_df_path}"
+            )
+
+        return new_df_path
+
+    dataset_path = create_wind_lmp_dataset(
         "../../../../results/wind_profile_data/309_wind_1_profiles.csv",
+        lmp_incr_frac,
+    )
+
+    # set up backcaster for wind and LMP uncertainty
+    if use_fractional_box_set:
+        lmp_set_class = ConstantFractionalUncertaintyBoxSet
+        lmp_set_class_params = fractional_box_set_params
+        lmp_set_qualifier = "_frac_uncert"
+    else:
+        lmp_set_class = CustomBoundsLMPBoxSet
+        lmp_set_class_params = None
+        lmp_set_qualifier = ""
+
+    wind_set_class = None
+    backcaster = forecaster_class(
+        dataset_path,
         n_prev_days=7,
         lmp_set_class=lmp_set_class,
         wind_set_class=wind_set_class,
+        lmp_set_class_params=lmp_set_class_params,
         wind_capacity=148.3,
         start=start,
     )
     ro_backcaster = backcaster.copy()
 
     # make directory for storing results
+    frac_str = frac_to_string(lmp_incr_frac, prefix="_")
     base_dir = (
         f"../../../../results/new_wind_lmp_results/"
         f"hor_{horizon}_start_{start}_steps_{num_steps}/"
-        f"{backcaster.__class__.__name__}"
+        f"{backcaster.__class__.__name__}{frac_str}{lmp_set_qualifier}"
     )
     os.makedirs(base_dir, exist_ok=True)
 
