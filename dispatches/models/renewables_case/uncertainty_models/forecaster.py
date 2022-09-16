@@ -397,7 +397,7 @@ class AbstractBus309Forecaster(Forecaster):
             bounds = [[p1, p2] for p1, p2 in zip(min_prices, max_prices)]
             return self.lmp_set_class(nom_prices, bounds)
         else:
-            return self.lmp_set_class(nom_prices, **self.lmp_set_params)
+            return self.lmp_set_class(nom_prices, **self.lmp_set_class_params)
 
     def forecast_wind_uncertainty(
             self,
