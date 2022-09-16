@@ -774,8 +774,12 @@ def evaluate_objective(
             pblk.fs.battery.elec_out[0] + pblk.fs.splitter.grid_elec[0],
             pyo.units.MW,
         )
-        revenue += pyo.value(total_power_out * lmp_val)
-        cost += pyo.value(pblk.fs.windpower.op_total_cost)
+        interval_time = pyo.units.convert(
+            pblk.fs.battery.dt,
+            pyo.units.h,
+        )
+        revenue += pyo.value(total_power_out * lmp_val * interval_time)
+        cost += pyo.value(pblk.fs.windpower.op_total_cost * interval_time)
 
     return (revenue, cost, revenue - cost)
 
@@ -1278,10 +1282,14 @@ def solve_rolling_horizon(
     accumul_results_df = pd.DataFrame(
         index=m_idx,
         columns=[
+            "Wind Production (MW)",
+            "Wind-to-Grid (MW)",
+            "Battery-to-Grid (MW)",
+            "Battery storage (MWh)",
             "Energy Price ($/MWh)",
-            "Revenue ($/hr)",
-            "Cost ($/hr)",
-            "Profit ($/hr)",
+            "Revenue ($)",
+            "Cost ($)",
+            "Profit ($)",
         ],
     )
 
@@ -1444,17 +1452,62 @@ def solve_rolling_horizon(
                 charging_eta=charging_eta,
                 discharging_eta=discharging_eta,
             )
-            accumul_results_df.loc[idx, forecaster.current_time - 1] = (
-                (pyo.value(model.pyomo_model.LMP[model.current_time - 1]),)
-                + evaluate_objective(
-                    model,
-                    start=model.current_time - 1,
-                    stop=model.current_time - 1,
+
+            # get model solution components for period just passed
+            prev_model_time = model.current_time - 1
+            prev_blk = (
+                model.pyomo_model.blocks[prev_model_time].process.fs
+            )
+            wind_production = pyo.value(
+                pyo.units.convert(
+                    prev_blk.windpower.electricity[0],
+                    pyo.units.MW,
                 )
             )
+            wind_to_grid = pyo.value(
+                pyo.units.convert(
+                    prev_blk.splitter.grid_elec[0],
+                    pyo.units.MW,
+                )
+            )
+            batt_to_grid = pyo.value(
+                pyo.units.convert(
+                    prev_blk.battery.elec_out[0],
+                    pyo.units.MW,
+                )
+            )
+            batt_charge = pyo.value(
+                pyo.units.convert(
+                    prev_blk.battery.state_of_charge[0],
+                    pyo.units.MWh,
+                )
+            )
+            lmp_value = pyo.value(
+                pyo.units.convert(
+                    model.pyomo_model.LMP[prev_model_time],
+                    1/pyo.units.MWh,
+                )
+            )
+            revenue, cost, profit = evaluate_objective(
+                model,
+                start=prev_model_time,
+                stop=prev_model_time,
+            )
 
-    if output_dir is not None:
-        accumul_results_df.to_csv(os.path.join(output_dir, "revenues.csv"))
+            # log solution results to dataframe
+            accumul_results_df.loc[idx, forecaster.current_time - 1] = (
+                wind_production,
+                wind_to_grid,
+                batt_to_grid,
+                batt_charge,
+                lmp_value,
+                revenue,
+                cost,
+                profit,
+            )
+
+        if output_dir is not None:
+            accumul_results_df.to_csv(os.path.join(output_dir, "revenues.csv"))
 
     return accumul_results_df
 
