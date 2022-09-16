@@ -237,6 +237,27 @@ class ConstantUncertaintyBoxSet(LMPBoxSet):
         return bounds
 
 
+class ConstantFractionalUncertaintyBoxSet(LMPBoxSet):
+    def __init__(self, lmp_data, fractional_uncertainty):
+        assert fractional_uncertainty >= 0
+        self.lmp_sig_nom = lmp_data
+        self.n_time_points = len(lmp_data)
+        self.fractional_uncertainty = fractional_uncertainty
+
+    @property
+    def sig_nom(self):
+        return self.lmp_sig_nom
+
+    def bounds(self):
+        bounds = []
+        for time in range(self.n_time_points):
+            nom_val = self.lmp_sig_nom[time]
+            lb = nom_val - abs(nom_val) * self.fractional_uncertainty
+            ub = nom_val + abs(nom_val) * self.fractional_uncertainty
+            bounds.append((lb, ub))
+        return bounds
+
+
 class SimpleLMPBoxSet(LMPBoxSet):
     def __init__(self, lmp_data, n_recent, growth_rate, avg_multiplier):
         """Initialize simple LMP box set."""
