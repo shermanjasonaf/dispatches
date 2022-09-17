@@ -744,3 +744,40 @@ if __name__ == "__main__":
 
     import pdb
     pdb.set_trace()
+
+    from dispatches.models.renewables_case.uncertainty_models.\
+        lmp_uncertainty_models import (
+            ConstantFractionalUncertaintyBoxSet,
+        )
+
+    avg_forecaster = AvgSample309Backcaster(
+        "../../../../../results/wind_profile_data/309_wind_1_profiles.csv",
+        n_prev_days=7,
+        lmp_set_class=ConstantFractionalUncertaintyBoxSet,
+        wind_set_class=None,
+        wind_capacity=148.3,
+        lmp_set_class_params={"fractional_uncertainty": 0.2},
+        wind_set_class_params=None,
+        start=2000,
+    )
+    schedule_length = 100
+    point_forecast = np.empty(schedule_length)
+    lmp_set = avg_forecaster.forecast_price_uncertainty(100)
+
+    for idx in range(schedule_length):
+        point_forecast[idx] = avg_forecaster.forecast_energy_prices(1)
+        avg_forecaster.advance_time()
+
+    periods = np.arange(schedule_length)
+    actual_lmps = avg_forecaster.historical_energy_prices(
+        2000 + np.arange(schedule_length)
+    )
+
+    actual_lmps -= abs(actual_lmps) * 0.25
+
+    # generate figure: actual and LMP set with nominal value
+    fig, ax = plt.subplots()
+    lmp_set.plot_bounds(ax, False)
+    ax.step(periods, actual_lmps, label="actual", where="post")
+    ax.legend()
+    plt.savefig(f"lmp_values_{schedule_length}.png")
