@@ -202,7 +202,7 @@ class CustomBoundsLMPBoxSet(LMPBoxSet):
     """
     LMP box set with custom bounds.
     """
-    def __init__(self, lmp_data, bounds):
+    def __init__(self, lmp_data, bounds, first_period_certain=False):
         assert len(lmp_data) == len(bounds)
 
         bounds_arr = np.array(bounds)
@@ -210,9 +210,15 @@ class CustomBoundsLMPBoxSet(LMPBoxSet):
 
         self.lmp_sig_nom = lmp_data
         self.bounds_arr = bounds_arr.tolist()
+        self.first_period_certain = first_period_certain
 
     def bounds(self):
-        return [tuple(bd) for bd in self.bounds_arr]
+        bounds = [tuple(bd) for bd in self.bounds_arr]
+
+        if self.first_period_certain:
+            bounds[0] = (self.lmp_sig_nom[0], self.lmp_sig_nom[0])
+
+        return bounds
 
     @property
     def sig_nom(self):
@@ -220,10 +226,11 @@ class CustomBoundsLMPBoxSet(LMPBoxSet):
 
 
 class ConstantUncertaintyBoxSet(LMPBoxSet):
-    def __init__(self, lmp_data, uncertainty):
+    def __init__(self, lmp_data, uncertainty, first_period_certain=False):
         self.lmp_sig_nom = lmp_data
         self.n_time_points = len(lmp_data)
         self.uncertainty = uncertainty
+        self.first_period_certain = first_period_certain
 
     @property
     def sig_nom(self):
@@ -233,16 +240,25 @@ class ConstantUncertaintyBoxSet(LMPBoxSet):
         bounds = [(self.lmp_sig_nom[time] - self.uncertainty,
                    self.lmp_sig_nom[time] + self.uncertainty)
                   for time in range(self.n_time_points)]
-        bounds[0] = (self.lmp_sig_nom[0], self.lmp_sig_nom[0])
+
+        if self.first_period_certain:
+            bounds[0] = (self.lmp_sig_nom[0], self.lmp_sig_nom[0])
+
         return bounds
 
 
 class ConstantFractionalUncertaintyBoxSet(LMPBoxSet):
-    def __init__(self, lmp_data, fractional_uncertainty):
+    def __init__(
+            self,
+            lmp_data,
+            fractional_uncertainty,
+            first_period_certain=False,
+            ):
         assert fractional_uncertainty >= 0
         self.lmp_sig_nom = lmp_data
         self.n_time_points = len(lmp_data)
         self.fractional_uncertainty = fractional_uncertainty
+        self.first_period_certain = first_period_certain
 
     @property
     def sig_nom(self):
@@ -255,6 +271,10 @@ class ConstantFractionalUncertaintyBoxSet(LMPBoxSet):
             lb = nom_val - abs(nom_val) * self.fractional_uncertainty
             ub = nom_val + abs(nom_val) * self.fractional_uncertainty
             bounds.append((lb, ub))
+
+        if self.first_period_certain:
+            bounds[0] = (self.lmp_sig_nom[0], self.lmp_sig_nom[0])
+
         return bounds
 
 

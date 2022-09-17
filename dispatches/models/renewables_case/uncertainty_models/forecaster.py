@@ -392,19 +392,16 @@ class AbstractBus309Forecaster(Forecaster):
         elif self.lmp_set_class is LMPDiscreteSet:
             return self.lmp_set_class(scenarios=prices.values, nom_idx=0)
         elif self.lmp_set_class is CustomBoundsLMPBoxSet:
+            # now obtain bounds
             min_prices = prices.min(axis=0)
             max_prices = prices.max(axis=0)
-
-            # take price for first interval to be certain
-            # parameter (assumed known immediately before period
-            # starts)
-            min_prices.iloc[0] = nom_prices[0]
-            max_prices.iloc[0] = nom_prices[0]
-
-            # now obtain bounds
             bounds = [[p1, p2] for p1, p2 in zip(min_prices, max_prices)]
 
-            return self.lmp_set_class(nom_prices, bounds)
+            return self.lmp_set_class(
+                nom_prices,
+                bounds,
+                **self.lmp_set_class_params,
+            )
         else:
             return self.lmp_set_class(nom_prices, **self.lmp_set_class_params)
 
@@ -728,7 +725,7 @@ if __name__ == "__main__":
         lmp_set_class=CustomBoundsLMPBoxSet,
         wind_set_class=None,
         wind_capacity=148.3,
-        lmp_set_class_params=None,
+        lmp_set_class_params={"first_period_certain": False},
         wind_set_class_params=None,
         start=2000,
     )
@@ -762,3 +759,5 @@ if __name__ == "__main__":
         num_intervals=12,
         include_fixed_dims=False,
     )
+    print(params)
+    print(joint_set.bounds)

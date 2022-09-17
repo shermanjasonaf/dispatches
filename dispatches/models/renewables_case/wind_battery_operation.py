@@ -1603,13 +1603,14 @@ def main():
     charging_eff = 0.95
     excl_throughputs = True
     simplify_battery_power_limits = True
-    simplify_uncertainty_set = False
+    simplify_uncertainty_set = True
 
     # settings for modifying dataset and forecasting
     start = 2000
     lmp_incr_frac = 0
     perfect_information = False
-    use_fractional_box_set = True
+    first_period_certain = True
+    use_fractional_box_set = False
     fractional_uncertainty = 0.2
 
     # pyros solver setting
@@ -1693,16 +1694,16 @@ def main():
     )
 
     # set up backcaster for wind and LMP uncertainty
+    lmp_set_class_params = {"first_period_certain": first_period_certain}
     if use_fractional_box_set:
         lmp_set_class = ConstantFractionalUncertaintyBoxSet
-        lmp_set_class_params = {
+        lmp_set_class_params.update({
             "fractional_uncertainty": fractional_uncertainty,
-        }
+        })
         lmp_set_frac_str = frac_to_string(fractional_uncertainty)
         lmp_set_qualifier = f"_frac_uncert_{lmp_set_frac_str}"
     else:
         lmp_set_class = CustomBoundsLMPBoxSet
-        lmp_set_class_params = None
         lmp_set_qualifier = ""
 
     wind_set_class = None
