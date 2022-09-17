@@ -1355,7 +1355,7 @@ def solve_rolling_horizon(
         # (3) projected for just solved prediction horizon,
         #     starting from and including current time
         controlled_periods = list(
-            range(idx * control_length, idx + 1 * control_length),
+            range(idx * control_length, (idx + 1) * control_length),
         )
         print("=" * 80)
         print(f"Step {idx} (decision for periods {controlled_periods})")
