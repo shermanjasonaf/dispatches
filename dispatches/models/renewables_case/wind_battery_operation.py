@@ -1599,7 +1599,7 @@ def main():
     lmp_incr_frac = 0
     perfect_information = False
     use_fractional_box_set = True
-    fractional_box_set_params = {"fractional_uncertainty": 0.1}
+    fractional_uncertainty = 0.2
 
     # pyros solver setting
     dr_order = 1
@@ -1684,8 +1684,11 @@ def main():
     # set up backcaster for wind and LMP uncertainty
     if use_fractional_box_set:
         lmp_set_class = ConstantFractionalUncertaintyBoxSet
-        lmp_set_class_params = fractional_box_set_params
-        lmp_set_qualifier = "_frac_uncert"
+        lmp_set_class_params = {
+            "fractional_uncertainty": fractional_uncertainty,
+        }
+        lmp_set_frac_str = frac_to_string(fractional_uncertainty)
+        lmp_set_qualifier = f"_frac_uncert_{lmp_set_frac_str}"
     else:
         lmp_set_class = CustomBoundsLMPBoxSet
         lmp_set_class_params = None
@@ -1704,11 +1707,12 @@ def main():
     ro_backcaster = backcaster.copy()
 
     # make directory for storing results
-    frac_str = frac_to_string(lmp_incr_frac, prefix="_")
+    actual_offset_frac_str = frac_to_string(lmp_incr_frac, prefix="_")
     base_dir = (
         f"../../../../results/new_wind_lmp_results/"
         f"hor_{horizon}_start_{start}_steps_{num_steps}/"
-        f"{backcaster.__class__.__name__}{frac_str}{lmp_set_qualifier}"
+        f"{backcaster.__class__.__name__}{actual_offset_frac_str}"
+        f"{lmp_set_qualifier}"
     )
     os.makedirs(base_dir, exist_ok=True)
 
