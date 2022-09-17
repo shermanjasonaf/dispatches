@@ -1779,6 +1779,9 @@ def main():
         f"{lmp_set_qualifier}"
     )
     os.makedirs(base_dir, exist_ok=True)
+    logging.info(
+        f"Successfully created directory: {base_dir}"
+    )
 
     # set up solvers
     solver = pyo.SolverFactory("gurobi")
