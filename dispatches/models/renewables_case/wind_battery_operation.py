@@ -1608,15 +1608,18 @@ def main():
 
     # settings for modifying dataset and forecasting
     start = 2000
-    lmp_incr_frac = 0
     perfect_information = False
     first_period_certain = True
     lmp_set_class = ConstantUncertaintyNonnegBoxSet
     fractional_uncertainty = 0.2  # applies only if fractional set used
     constant_uncertainty = 10  # applies only if constant set used
+    lmp_history = "uniform5"
 
     # pyros solver setting
     dr_order = 1
+
+    # validate LMP history setting
+    assert lmp_history in ["actual", "uniform5", "uniform10"]
 
     # configure system
     logging.basicConfig(level=logging.INFO)
@@ -1652,42 +1655,88 @@ def main():
 
         return increment_str
 
-    def create_wind_lmp_dataset(base_dataset_file_path, lmp_increment_frac):
+    def create_random_wind_lmp_datasets(base_dataset_file_path, output_dir):
         """
-        Create new wind/data LMP dataset from file and return
-        path to that file. If `lmp_increment_frac` is 0,
-        then no new file is created, and `base_dataset_file_path`
-        is returned.
+        Create directory of three datasets, in which the day-ahead
+        LMPs are:
+        - same as that in `base_dataset_file_path` (actual LMPs)
+        - drawn from a uniform distribution about the actual LMPs
+          (max(0, Uniform(LMP - 5, LMP + 5)))
+        - drawn from a uniform distribution about the actual LMPs
+          (max(0, Uniform(LMP - 10, LMP + 10)))
+
+        Returns
+        -------
+        output_dataset_paths : dict
+            Mapping from LMP histories to corresponding
+            dataset filepaths.
         """
+        # get local filename and extension, verify extnesion is .csv
+        base_dataset_local_name = os.path.split(base_dataset_file_path)[-1]
+        base_dataset_fname, base_dataset_ext = os.path.splitext(
+            base_dataset_local_name
+        )
+        assert base_dataset_ext == ".csv"
 
-        if lmp_incr_frac == 0:
-            # don't need to create new dataset
-            new_df_path = base_dataset_file_path
-        else:
-            # create new dataset file path
-            increment_str = float_to_string(lmp_increment_frac, prefix="_")
-            new_df_path = (
-                base_dataset_file_path.split(".csv")[0]
-                + increment_str
-                + ".csv"
+        os.makedirs(output_dir, exist_ok=False)
+
+        output_dataset_paths = {}
+
+        # open base dataset spreadsheet; write to output dir
+        actual_filename = os.path.join(output_dir, base_dataset_local_name)
+        df = pd.read_csv(base_dataset_file_path, index_col=0)
+        df.to_csv(actual_filename)
+        output_dataset_paths["actual"] = actual_filename
+
+        actual_lmps = df["LMP DA"].to_numpy()
+        rng = np.random.default_rng(123456)
+        for max_offset in (5, 10):
+            # uniform sample LMPs
+            random_lmps = rng.uniform(
+                actual_lmps - max_offset,
+                actual_lmps + max_offset,
             )
+            random_lmps[random_lmps < 0] = 0
 
-            # open base dataset, copy, and create LMPs
-            df = pd.read_csv(base_dataset_file_path)
-            df["LMP DA"] += lmp_increment_frac * abs(df["LMP DA"])
-            df.to_csv(new_df_path)
+            assert np.all(abs(random_lmps - actual_lmps) <= max_offset)
 
-            logging.info(
-                "Successfully wrote new dataset to spreadsheet "
-                f"{new_df_path}"
+            # modify copy of dataframe with sampled LMPs; write to file
+            new_df = df.copy()
+            new_df["LMP DA"] = random_lmps
+            output_filename = os.path.join(
+                output_dir,
+                f"{base_dataset_fname}_uniform{max_offset}.csv"
             )
+            output_dataset_paths[f"uniform{max_offset}"] = output_filename
+            new_df.to_csv(output_filename)
 
-        return new_df_path
+        return output_dataset_paths
 
-    dataset_path = create_wind_lmp_dataset(
-        "../../../../results/wind_profile_data/309_wind_1_profiles.csv",
-        lmp_incr_frac,
+    # generate the LMP datasets
+    random_dataset_dir = (
+       "../../../../results/wind_profile_data/random_histories"
     )
+    if not os.path.exists(random_dataset_dir):
+        all_dataset_paths = create_random_wind_lmp_datasets(
+            "../../../../results/wind_profile_data/309_wind_1_profiles.csv",
+            random_dataset_dir,
+        )
+    else:
+        print("exists")
+        all_dataset_paths = {}
+        for dataset_fname in os.listdir(random_dataset_dir):
+            fname_no_ext = os.path.splitext(dataset_fname)[0]
+            dataset_qual = fname_no_ext.split("309_wind_1_profiles")[-1].strip(
+                "_"
+            )
+            if dataset_qual == "":
+                dataset_qual = "actual"
+            all_dataset_paths[dataset_qual] = os.path.join(
+                random_dataset_dir,
+                dataset_fname,
+            )
+
+    dataset_path = all_dataset_paths[lmp_history]
 
     # set up backcaster for wind and LMP uncertainty
     lmp_set_class_params = {"first_period_certain": first_period_certain}
@@ -1722,11 +1771,11 @@ def main():
     ro_backcaster = backcaster.copy()
 
     # make directory for storing results
-    actual_offset_frac_str = float_to_string(lmp_incr_frac, prefix="_")
+    lmp_history_qual = "" if lmp_history == "actual" else f"_{lmp_history}"
     base_dir = (
         f"../../../../results/new_wind_lmp_results/"
         f"hor_{horizon}_start_{start}_steps_{num_steps}/"
-        f"{backcaster.__class__.__name__}{actual_offset_frac_str}"
+        f"{backcaster.__class__.__name__}{lmp_history_qual}"
         f"{lmp_set_qualifier}"
     )
     os.makedirs(base_dir, exist_ok=True)
