@@ -351,6 +351,17 @@ def plot_power_output_results(
     lmp_values = list()
     wind_capacities = list()
 
+    # set power output axis limits
+    windpower_design_capacity = pyo.value(
+        pyo.units.convert(
+            blocks[0].fs.windpower.system_capacity,
+            pyo.units.MW,
+        )
+    )
+    ax1.set_ylim(
+        [-0.05 * windpower_design_capacity, windpower_design_capacity * 1.05],
+    )
+
     for t, blk in zip(periods, blocks):
         battery_elecs.append(pyo.value(blk.fs.battery.elec_out[0]))
         grid_elecs.append(pyo.value(blk.fs.splitter.grid_elec[0]))
