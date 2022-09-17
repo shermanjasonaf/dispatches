@@ -247,6 +247,33 @@ class ConstantUncertaintyBoxSet(LMPBoxSet):
         return bounds
 
 
+class ConstantUncertaintyNonnegBoxSet(LMPBoxSet):
+    def __init__(self, lmp_data, uncertainty, first_period_certain=False):
+        self.lmp_sig_nom = lmp_data
+        self.n_time_points = len(lmp_data)
+        self.uncertainty = uncertainty
+        self.first_period_certain = first_period_certain
+
+        # nominal LMPs must all be nonnegative
+        assert np.all(self.lmp_sig_nom >= 0)
+
+    @property
+    def sig_nom(self):
+        return self.lmp_sig_nom
+
+    def bounds(self):
+        bounds = []
+        for time in range(self.n_time_points):
+            lower_bound = max(0, self.lmp_sig_nom[time] - self.uncertainty)
+            upper_bound = max(0, self.lmp_sig_nom[time] + self.uncertainty)
+            bounds.append((lower_bound, upper_bound))
+
+        if self.first_period_certain:
+            bounds[0] = (self.lmp_sig_nom[0], self.lmp_sig_nom[0])
+
+        return bounds
+
+
 class ConstantFractionalUncertaintyBoxSet(LMPBoxSet):
     def __init__(
             self,

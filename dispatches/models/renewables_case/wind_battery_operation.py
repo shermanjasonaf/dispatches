@@ -1590,6 +1590,7 @@ def main():
         lmp_uncertainty_models import (
             CustomBoundsLMPBoxSet,
             ConstantFractionalUncertaintyBoxSet,
+            ConstantUncertaintyNonnegBoxSet,
         )
     from dispatches.models.renewables_case.uncertainty_models.\
         forecaster import Perfect309Forecaster, AvgSample309Backcaster
@@ -1610,8 +1611,9 @@ def main():
     lmp_incr_frac = 0
     perfect_information = False
     first_period_certain = True
-    use_fractional_box_set = False
-    fractional_uncertainty = 0.2
+    lmp_set_class = ConstantUncertaintyNonnegBoxSet
+    fractional_uncertainty = 0.2  # applies only if fractional set used
+    constant_uncertainty = 10  # applies only if constant set used
 
     # pyros solver setting
     dr_order = 1
@@ -1626,26 +1628,20 @@ def main():
     else:
         forecaster_class = AvgSample309Backcaster
 
-    def frac_to_string(frac, prefix="", postfix=""):
+    def float_to_string(value, prefix="", postfix=""):
         """
-        Convert fractional floating point value to string
-        of form '{prefix}{sign}_0pt{decimal_places}{postfix}', where
+        Convert floating point value to string
+        of form '{prefix}{sign}_{intpart}pt{decimal_places}{postfix}', where
         {sign} is 'pl' or 'mn' (depending on sign of fraction).
         """
-        assert -1 < frac
-        assert frac < 1
-
-        if frac == 0:
+        if value == 0:
             increment_str = ""
         else:
-            if frac > 0:
-                sign_str = "pl_"
-            else:
-                sign_str = "mn_"
+            sign_str = "pl_" if value > 0 else "mn_"
 
             # remove +/- sign. Replace decimal point with 'pt'
             num_str = (
-                str(frac)
+                str(value)
                 .replace("-", "")
                 .replace("+", "")
                 .replace(".", "pt")
@@ -1669,7 +1665,7 @@ def main():
             new_df_path = base_dataset_file_path
         else:
             # create new dataset file path
-            increment_str = frac_to_string(lmp_increment_frac, prefix="_")
+            increment_str = float_to_string(lmp_increment_frac, prefix="_")
             new_df_path = (
                 base_dataset_file_path.split(".csv")[0]
                 + increment_str
@@ -1695,16 +1691,23 @@ def main():
 
     # set up backcaster for wind and LMP uncertainty
     lmp_set_class_params = {"first_period_certain": first_period_certain}
-    if use_fractional_box_set:
-        lmp_set_class = ConstantFractionalUncertaintyBoxSet
+    if lmp_set_class is ConstantFractionalUncertaintyBoxSet:
+        assert fractional_uncertainty > 0 and fractional_uncertainty <= 1
         lmp_set_class_params.update({
             "fractional_uncertainty": fractional_uncertainty,
         })
-        lmp_set_frac_str = frac_to_string(fractional_uncertainty)
+        lmp_set_frac_str = float_to_string(fractional_uncertainty)
         lmp_set_qualifier = f"_frac_uncert_{lmp_set_frac_str}"
-    else:
-        lmp_set_class = CustomBoundsLMPBoxSet
+    elif lmp_set_class is CustomBoundsLMPBoxSet:
         lmp_set_qualifier = ""
+    elif lmp_set_class is ConstantUncertaintyNonnegBoxSet:
+        lmp_set_unc_str = float_to_string(constant_uncertainty)
+        lmp_set_class_params.update({
+            "uncertainty": constant_uncertainty,
+        })
+        lmp_set_qualifier = f"_const_uncert_{lmp_set_unc_str}"
+    else:
+        raise ValueError(f"Set type {lmp_set_class.__name__} not supported")
 
     wind_set_class = None
     backcaster = forecaster_class(
@@ -1719,7 +1722,7 @@ def main():
     ro_backcaster = backcaster.copy()
 
     # make directory for storing results
-    actual_offset_frac_str = frac_to_string(lmp_incr_frac, prefix="_")
+    actual_offset_frac_str = float_to_string(lmp_incr_frac, prefix="_")
     base_dir = (
         f"../../../../results/new_wind_lmp_results/"
         f"hor_{horizon}_start_{start}_steps_{num_steps}/"

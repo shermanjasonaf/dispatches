@@ -718,14 +718,22 @@ class AvgSample309Backcaster(AbstractBus309Forecaster):
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
 
+    from dispatches.models.renewables_case.uncertainty_models.\
+        lmp_uncertainty_models import (
+            ConstantUncertaintyNonnegBoxSet,
+        )
+
     # example forecaster
     forecaster = AvgSample309Backcaster(
         "../../../../../results/wind_profile_data/309_wind_1_profiles.csv",
         n_prev_days=7,
-        lmp_set_class=CustomBoundsLMPBoxSet,
+        lmp_set_class=ConstantUncertaintyNonnegBoxSet,
         wind_set_class=None,
         wind_capacity=148.3,
-        lmp_set_class_params={"first_period_certain": False},
+        lmp_set_class_params={
+            "first_period_certain": False,
+            "uncertainty": 10,
+        },
         wind_set_class_params=None,
         start=2000,
     )
