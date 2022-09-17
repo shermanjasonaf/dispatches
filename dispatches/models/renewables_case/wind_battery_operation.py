@@ -1407,7 +1407,7 @@ def solve_rolling_horizon(
                         {
                             idx: val
                             for idx, val in enumerate(lmp_set.sig_nom)
-                            if idx in lmp_set.determine_dims_fixed_by_bounds()
+                            if idx in lmp_set.determine_fixed_dims()
                         }
                     )
 

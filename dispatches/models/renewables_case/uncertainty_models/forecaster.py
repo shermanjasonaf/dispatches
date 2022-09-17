@@ -394,7 +394,16 @@ class AbstractBus309Forecaster(Forecaster):
         elif self.lmp_set_class is CustomBoundsLMPBoxSet:
             min_prices = prices.min(axis=0)
             max_prices = prices.max(axis=0)
+
+            # take price for first interval to be certain
+            # parameter (assumed known immediately before period
+            # starts)
+            min_prices.iloc[0] = nom_prices[0]
+            max_prices.iloc[0] = nom_prices[0]
+
+            # now obtain bounds
             bounds = [[p1, p2] for p1, p2 in zip(min_prices, max_prices)]
+
             return self.lmp_set_class(nom_prices, bounds)
         else:
             return self.lmp_set_class(nom_prices, **self.lmp_set_class_params)
@@ -532,12 +541,12 @@ class AbstractBus309Forecaster(Forecaster):
             wind_set = self.forecast_wind_uncertainty(
                 num_intervals,
             )
-            return wind_set.pyros_set()
+            return wind_set.pyros_set(include_fixed_dims=include_fixed_dims)
         elif self.wind_set_class is None:
             lmp_set = self.forecast_price_uncertainty(
                 num_intervals,
             )
-            return lmp_set.pyros_set()
+            return lmp_set.pyros_set(include_fixed_dims=include_fixed_dims)
         else:
             lmp_set = self.forecast_price_uncertainty(
                 num_intervals,
@@ -710,7 +719,10 @@ class AvgSample309Backcaster(AbstractBus309Forecaster):
 
 
 if __name__ == "__main__":
-    forecaster = Perfect309Forecaster(
+    import matplotlib.pyplot as plt
+
+    # example forecaster
+    forecaster = AvgSample309Backcaster(
         "../../../../../results/wind_profile_data/309_wind_1_profiles.csv",
         n_prev_days=7,
         lmp_set_class=CustomBoundsLMPBoxSet,
@@ -720,14 +732,21 @@ if __name__ == "__main__":
         wind_set_class_params=None,
         start=2000,
     )
-    lmp_set = forecaster.forecast_price_uncertainty(12)
-    # wind_set = forecaster.forecast_wind_uncertainty(12)
 
-    import matplotlib.pyplot as plt
-    fig, ax = plt.subplots()
-
+    # get LMP uncertainty set for next 24 periods
+    hor_length = 24
+    lmp_set = forecaster.forecast_price_uncertainty(hor_length)
     print(lmp_set.bounds())
-    lmp_set.plot_set(ax, highlight_peak_effects=False, offset=0)
+
+    # get actual LMPs
+    periods = forecaster.current_time + np.arange(hor_length)
+    actual_lmps = forecaster.historical_energy_prices(periods)
+
+    # plot LMP set and actual LMPs
+    fig, ax = plt.subplots()
+    ax.step(periods, actual_lmps, where="post", label="actual LMPs")
+    lmp_set.plot_set(ax, highlight_peak_effects=False, offset=2000)
+    plt.legend()
     plt.savefig("test.png")
     plt.close()
 
@@ -737,47 +756,9 @@ if __name__ == "__main__":
         lmp_params,
         wind_params,
         nested=True,
+        include_fixed_dims=False,
     )
     joint_set = forecaster.get_joint_lmp_wind_pyros_set(
-        num_intervals=24,
+        num_intervals=12,
+        include_fixed_dims=False,
     )
-
-    import pdb
-    pdb.set_trace()
-
-    from dispatches.models.renewables_case.uncertainty_models.\
-        lmp_uncertainty_models import (
-            ConstantFractionalUncertaintyBoxSet,
-        )
-
-    avg_forecaster = AvgSample309Backcaster(
-        "../../../../../results/wind_profile_data/309_wind_1_profiles.csv",
-        n_prev_days=7,
-        lmp_set_class=ConstantFractionalUncertaintyBoxSet,
-        wind_set_class=None,
-        wind_capacity=148.3,
-        lmp_set_class_params={"fractional_uncertainty": 0.2},
-        wind_set_class_params=None,
-        start=2000,
-    )
-    schedule_length = 100
-    point_forecast = np.empty(schedule_length)
-    lmp_set = avg_forecaster.forecast_price_uncertainty(100)
-
-    for idx in range(schedule_length):
-        point_forecast[idx] = avg_forecaster.forecast_energy_prices(1)
-        avg_forecaster.advance_time()
-
-    periods = np.arange(schedule_length)
-    actual_lmps = avg_forecaster.historical_energy_prices(
-        2000 + np.arange(schedule_length)
-    )
-
-    actual_lmps -= abs(actual_lmps) * 0.25
-
-    # generate figure: actual and LMP set with nominal value
-    fig, ax = plt.subplots()
-    lmp_set.plot_bounds(ax, False)
-    ax.step(periods, actual_lmps, label="actual", where="post")
-    ax.legend()
-    plt.savefig(f"lmp_values_{schedule_length}.png")
