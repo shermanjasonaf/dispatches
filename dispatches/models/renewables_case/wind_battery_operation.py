@@ -1523,7 +1523,9 @@ def solve_rolling_horizon(
             )
 
         if output_dir is not None:
-            accumul_results_df.to_csv(os.path.join(output_dir, "revenues.csv"))
+            df_output_path = os.path.join(output_dir, "revenues.csv")
+            accumul_results_df.to_csv(df_output_path)
+            logging.info(f"Successfully updated results at {df_output_path}")
 
     return accumul_results_df
 
