@@ -1771,6 +1771,7 @@ def main():
         wind_set_class=wind_set_class,
         lmp_set_class_params=lmp_set_class_params,
         wind_capacity=148.3,
+        first_period_certain=first_period_certain,
         start=start,
     )
     ro_backcaster = backcaster.copy()

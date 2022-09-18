@@ -196,6 +196,11 @@ class AbstractBus309Forecaster(Forecaster):
     wind_set_class_params : dict or None, optional
         Optional parameters for the wind production uncertainty
         prediction. Default is `None`.
+    first_period_certain : bool, optional
+        LMP and wind capacity for the interval indexed by
+        `current_time` are known
+        (at least a split second) in advance of the start
+        of the interval to be equal to their actual value.
     start : int, optional
         Ordinal position of the interval considered to be the
         start of the planning horizon. The default is 0.
@@ -209,6 +214,7 @@ class AbstractBus309Forecaster(Forecaster):
             wind_capacity,
             lmp_set_class_params=None,
             wind_set_class_params=None,
+            first_period_certain=False,
             start=0,
             ):
         """Construct LMP forecaster.
@@ -258,6 +264,9 @@ class AbstractBus309Forecaster(Forecaster):
                 "Output wind production forecasts exceed wind capacity "
                 f"of {wind_capacity}"
             )
+
+        # are LMP and wind capacity known
+        self.first_period_certain = first_period_certain
 
     def copy(self):
         return copy.deepcopy(self)
@@ -393,9 +402,15 @@ class AbstractBus309Forecaster(Forecaster):
             return self.lmp_set_class(scenarios=prices.values, nom_idx=0)
         elif self.lmp_set_class is CustomBoundsLMPBoxSet:
             # now obtain bounds
-            min_prices = prices.min(axis=0)
-            max_prices = prices.max(axis=0)
+            min_prices = prices.min(axis=0).to_numpy()
+            max_prices = prices.max(axis=0).to_numpy()
+
             bounds = [[p1, p2] for p1, p2 in zip(min_prices, max_prices)]
+
+            # if first period certain, set corresponding
+            # bounds to nom price
+            if self.first_period_certain:
+                bounds[0] = [nom_prices[0], nom_prices[0]]
 
             return self.lmp_set_class(
                 nom_prices,
@@ -403,6 +418,12 @@ class AbstractBus309Forecaster(Forecaster):
                 **self.lmp_set_class_params,
             )
         else:
+            # TODO: this only works for a few of the LMP box sets.
+            #       Revisit later.
+            lmp_set_class_params = self.lmp_set_class_params
+            lmp_set_class_params.update(
+                {"first_period_certain": self.first_period_certain},
+            )
             return self.lmp_set_class(nom_prices, **self.lmp_set_class_params)
 
     def forecast_wind_uncertainty(
@@ -683,8 +704,16 @@ class AvgSample309Backcaster(AbstractBus309Forecaster):
             time periods.
         """
         prices = self._forecast("LMP DA", num_intervals)
+        price_forecast = prices.mean(axis=0).values
 
-        return prices.mean(axis=0).values
+        # if price for first period known, set forecast to
+        # actual value
+        if self.first_period_certain:
+            price_forecast[0] = self.historical_energy_prices(
+                self.current_time
+            )[0]
+
+        return price_forecast
 
     def forecast_wind_production(
             self,
@@ -731,11 +760,11 @@ if __name__ == "__main__":
         wind_set_class=None,
         wind_capacity=148.3,
         lmp_set_class_params={
-            "first_period_certain": False,
             "uncertainty": 10,
         },
         wind_set_class_params=None,
         start=2000,
+        first_period_certain=True,
     )
 
     # get LMP uncertainty set for next 24 periods
