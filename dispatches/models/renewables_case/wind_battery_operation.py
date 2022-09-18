@@ -1301,6 +1301,7 @@ def solve_rolling_horizon(
             "Revenue ($)",
             "Cost ($)",
             "Profit ($)",
+            "Nonzero Nonstatic PyROS DR Vars (kW/($/MWh))",
         ],
     )
 
@@ -1341,12 +1342,15 @@ def solve_rolling_horizon(
                 uncertainty_set,
                 **solver_kwargs,
             )
+
+            nonzero_nonstatic_dr_vars = res.solver.nonzero_nonstatic_dr_vars
         else:
             res = solver.solve(
                 model.pyomo_model,
                 load_solutions=False,
                 **solver_kwargs,
             )
+            nonzero_nonstatic_dr_vars = None
 
         if pyo.check_optimal_termination(res):
             model.pyomo_model.solutions.load_from(res)
@@ -1515,6 +1519,7 @@ def solve_rolling_horizon(
                 revenue,
                 cost,
                 profit,
+                nonzero_nonstatic_dr_vars,
             )
 
         if output_dir is not None:
@@ -1613,7 +1618,7 @@ def main():
     lmp_set_class = ConstantUncertaintyNonnegBoxSet
     fractional_uncertainty = 0.2  # applies only if fractional set used
     constant_uncertainty = 10  # applies only if constant set used
-    lmp_history = "uniform5"
+    lmp_history = "actual"
 
     # pyros solver setting
     dr_order = 1
