@@ -1527,6 +1527,12 @@ def solve_rolling_horizon(
             accumul_results_df.to_csv(df_output_path)
             logging.info(f"Successfully updated results at {df_output_path}")
 
+            # log revenue from spreadsheet
+            # NOTE: not necessarily same as that printed previously,
+            #       as previous value has been calculated before the
+            #       model was advanced (and hence, before LMPs updated)
+            total_revenue = accumul_results_df["Revenue ($)"].sum()
+            logging.info(f"Total accumulated revenue: ${total_revenue:.2f}")
     return accumul_results_df
 
 
