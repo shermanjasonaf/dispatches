@@ -380,7 +380,20 @@ def plot_power_output_results(
     wind_outputs.append(wind_outputs[-1])
     nameplate_powers.append(nameplate_powers[-1])
     wind_capacities.append(wind_capacities[-1])
+    wind_system_capacity = [
+        pyo.value(blk.fs.windpower.system_capacity)
+        for _ in wind_capacities
+    ]
 
+    ax1.step(
+        periods,
+        np.array(wind_system_capacity) / 1000,
+        where="post",
+        label="wind system capacity",
+        linewidth=1.5,
+        color="purple",
+        linestyle="dashed",
+    )
     if periods[periods >= active_start].size > 0:
         ax1.step(
             periods[periods >= active_start],
