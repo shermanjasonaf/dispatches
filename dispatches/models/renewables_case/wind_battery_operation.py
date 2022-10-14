@@ -702,32 +702,6 @@ def get_dof_vars(model, nested=True):
     return first_stage_vars, second_stage_vars
 
 
-def get_uncertain_params(model, lmp_set, include_fixed_dims=True, nested=True):
-    """
-    Obtain uncertain parameters for all active model blocks.
-    Optionally, include dimensions which are implicitly 'fixed'
-    by the uncertainty set parameter bounds.
-    """
-    start_time = model.current_time
-    lmp_params = list(
-        val for t, val in model.pyomo_model.LMP.items() if t >= start_time
-    )
-    uncertain_params = lmp_set.get_uncertain_params(
-        lmp_params,
-        include_fixed_dims=include_fixed_dims,
-        nested=nested,
-    )
-
-    if nested:
-        # lump the first and second lists into a single list,
-        # as the uncertain parameters in these lists are realized
-        # by the true second stage
-        uncertain_params[0] += uncertain_params[1]
-        uncertain_params.remove(uncertain_params[1])
-
-    return uncertain_params
-
-
 def evaluate_objective(
         mp_model,
         start=None,
@@ -1619,6 +1593,10 @@ def main():
             ConstantUncertaintyNonnegBoxSet,
         )
     from dispatches.models.renewables_case.uncertainty_models.\
+        wind_uncertainty_models import (
+            ConstantUncertaintyNonnegBoxSet as ConstantWindSet
+        )
+    from dispatches.models.renewables_case.uncertainty_models.\
         forecaster import Perfect309Forecaster, AvgSample309Backcaster
 
     # horizon lengths
@@ -1637,6 +1615,7 @@ def main():
     perfect_information = False
     first_period_certain = True
     lmp_set_class = ConstantUncertaintyNonnegBoxSet
+    wind_set_class = ConstantWindSet
     fractional_uncertainty = 0.2  # applies only if fractional set used
     constant_uncertainty = 10  # applies only if constant set used
     lmp_history = "actual"
@@ -1784,13 +1763,29 @@ def main():
     else:
         raise ValueError(f"Set type {lmp_set_class.__name__} not supported")
 
-    wind_set_class = None
+    wind_set_class_params = {"first_period_certain": first_period_certain}
+    if wind_set_class is ConstantWindSet:
+        wind_set_unc_str = float_to_string(constant_uncertainty)
+        wind_set_class_params.update({
+            "uncertainty": constant_uncertainty / 148.3,
+        })
+        wind_set_qualifier = f"_wind_uncert_{wind_set_unc_str}"
+    elif wind_set_class is None:
+        wind_set_class_params = None
+        wind_set_qualifier = ""
+    else:
+        raise ValueError(
+            f"Wind set type {wind_set_class.__name__} "
+            "not supported"
+        )
+
     backcaster = forecaster_class(
         dataset_path,
         n_prev_days=7,
         lmp_set_class=lmp_set_class,
         wind_set_class=wind_set_class,
         lmp_set_class_params=lmp_set_class_params,
+        wind_set_class_params=wind_set_class_params,
         wind_capacity=148.3,
         first_period_certain=first_period_certain,
         start=start,
@@ -1803,7 +1798,7 @@ def main():
         f"../../../../results/new_wind_lmp_results/"
         f"hor_{horizon}_start_{start}_steps_{num_steps}/"
         f"{backcaster.__class__.__name__}{lmp_history_qual}"
-        f"{lmp_set_qualifier}"
+        f"{lmp_set_qualifier}{wind_set_qualifier}"
     )
     os.makedirs(base_dir, exist_ok=True)
     logging.info(
