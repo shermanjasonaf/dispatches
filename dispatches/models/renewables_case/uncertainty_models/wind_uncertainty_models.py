@@ -210,14 +210,33 @@ class CustomBoundsWindBoxSet(WindBoxSet):
 
 
 class ConstantUncertaintyNonnegBoxSet(WindBoxSet):
-    def __init__(self, wind_data, uncertainty, first_period_certain=False):
+    def __init__(
+            self,
+            wind_data,
+            uncertainty,
+            first_period_certain=False,
+            min_val=0,
+            max_val=None,
+            ):
+        """Initialize self.
+
+        """
         self.wind_sig_nom = wind_data
         self.n_time_points = len(wind_data)
         self.uncertainty = uncertainty
         self.first_period_certain = first_period_certain
 
-        # nominal LMPs must all be nonnegative
-        assert np.all(self.sig_nom >= 0)
+        # verify nominal signal is in set
+        if min_val is not None:
+            assert np.all(self.sig_nom >= min_val)
+        if max_val is not None:
+            assert np.all(self.sig_nom <= max_val)
+
+        self.min_val = min_val
+        self.max_val = max_val
+
+        # verify uncertainty is valid
+        assert self.uncertainty >= 0
 
     @property
     def sig_nom(self):
@@ -226,8 +245,14 @@ class ConstantUncertaintyNonnegBoxSet(WindBoxSet):
     def bounds(self):
         bounds = []
         for time in range(self.n_time_points):
-            lower_bound = max(0, self.sig_nom[time] - self.uncertainty)
-            upper_bound = max(0, self.sig_nom[time] + self.uncertainty)
+            lower_bound = max(
+                self.min_val,
+                self.sig_nom[time] - self.uncertainty,
+            )
+            upper_bound = max(
+                self.min_val,
+                min(self.sig_nom[time] + self.uncertainty, self.max_val),
+            )
             bounds.append((lower_bound, upper_bound))
 
         if self.first_period_certain:

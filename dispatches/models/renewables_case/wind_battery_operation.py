@@ -1601,7 +1601,7 @@ def main():
 
     # horizon lengths
     horizon = 12
-    num_steps = 100
+    num_steps = 24
     control_length = 1
 
     # model settings
@@ -1612,14 +1612,15 @@ def main():
 
     # settings for modifying dataset and forecasting
     start = 2000
-    perfect_information = True
+    perfect_information = False
     first_period_certain = True
     lmp_set_class = ConstantUncertaintyNonnegBoxSet
     wind_set_class = ConstantWindSet
     fractional_uncertainty = 0.2  # applies only if fractional set used
-    constant_uncertainty = 10  # applies only if constant set used
+    constant_lmp_uncertainty = 0   # applies iff constant LMP set used
+    constant_wind_uncertainty = 20  # applies iff constant wind set used
     lmp_history = "actual"
-    wind_history = "uniform20"
+    wind_history = "actual"
 
     # pyros solver setting
     dr_order = 1
@@ -1856,9 +1857,9 @@ def main():
     elif lmp_set_class is CustomBoundsLMPBoxSet:
         lmp_set_qualifier = ""
     elif lmp_set_class is ConstantUncertaintyNonnegBoxSet:
-        lmp_set_unc_str = float_to_string(constant_uncertainty)
+        lmp_set_unc_str = float_to_string(constant_lmp_uncertainty)
         lmp_set_class_params.update({
-            "uncertainty": constant_uncertainty,
+            "uncertainty": constant_lmp_uncertainty,
         })
         lmp_set_qualifier = f"_const_uncert_{lmp_set_unc_str}"
     else:
@@ -1866,9 +1867,9 @@ def main():
 
     wind_set_class_params = {"first_period_certain": first_period_certain}
     if wind_set_class is ConstantWindSet:
-        wind_set_unc_str = float_to_string(constant_uncertainty)
+        wind_set_unc_str = float_to_string(constant_wind_uncertainty)
         wind_set_class_params.update({
-            "uncertainty": constant_uncertainty / 148.3,
+            "uncertainty": constant_wind_uncertainty,
         })
         wind_set_qualifier = f"_wind_uncert_{wind_set_unc_str}"
     elif wind_set_class is None:
@@ -1953,8 +1954,6 @@ def main():
         simplify_battery_power_limits=simplify_battery_power_limits,
         simplify_uncertainty_set=simplify_uncertainty_set,
     )
-
-    pdb.set_trace()
 
     # set up RO model
     mdl = create_two_stg_wind_battery_model(

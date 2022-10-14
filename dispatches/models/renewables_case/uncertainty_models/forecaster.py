@@ -21,7 +21,11 @@ import pyomo.contrib.pyros as pyros
 from dispatches.models.renewables_case.uncertainty_models \
         .lmp_uncertainty_models import LMPDiscreteSet, CustomBoundsLMPBoxSet
 from dispatches.models.renewables_case.uncertainty_models \
-        .wind_uncertainty_models import WindDiscreteSet, CustomBoundsWindBoxSet
+        .wind_uncertainty_models import (
+                WindDiscreteSet,
+                CustomBoundsWindBoxSet,
+                ConstantUncertaintyNonnegBoxSet as ConstantWindSet,
+            )
 
 
 class NoForecast(Exception):
@@ -459,6 +463,32 @@ class AbstractBus309Forecaster(Forecaster):
             upper_bounds = wind_production.max(axis=0).values
             bounds = [[lb, ub] for lb, ub in zip(lower_bounds, upper_bounds)]
             return self.wind_set_class(wind_data=sig_nom, bounds=bounds)
+        elif self.wind_set_class is ConstantWindSet:
+            # model uncertainty in the capacities
+            # or the capacity factors
+            # (depending on what was specified)
+            wind_set_class_params = self.wind_set_class_params.copy()
+
+            # scale to capacity fators as necessary
+            scale_factor = self.wind_capacity if capacity_factors else 1
+            wind_set_class_params["uncertainty"] /= scale_factor
+            if wind_set_class_params.get("max_val", None) is not None:
+                wind_set_class_params["max_val"] /= scale_factor
+            else:
+                # force upper bound of the set to the system
+                # capacity
+                wind_set_class_params["max_val"] = (
+                    self.wind_capacity / scale_factor
+                )
+            if wind_set_class_params.get("min_val", None) is not None:
+                wind_set_class_params["min_val"] /= scale_factor
+            else:
+                wind_set_class_params["min_val"] = 0
+
+            return self.wind_set_class(
+                wind_data=sig_nom,
+                **wind_set_class_params,
+            )
         else:
             return self.wind_set_class(sig_nom, **self.wind_set_class_params)
 
