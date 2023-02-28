@@ -108,7 +108,7 @@ class Forecaster(abc.ABC):
         ...
 
     @abc.abstractmethod
-    def forecast_wind_production(self, number_periods):
+    def forecast_wind_production(self, number_periods, capacity_factors=False):
         """
         Forecast (nominal) wind generation capacities for the
         next `number_periods` time intervals, including
@@ -137,7 +137,11 @@ class Forecaster(abc.ABC):
         ...
 
     @abc.abstractmethod
-    def forecast_wind_uncertainty(self, number_periods):
+    def forecast_wind_uncertainty(
+            self,
+            number_periods,
+            capacity_factors=False,
+            ):
         """
         Forecast uncertainty in the wind prodution capacities for the
         next `number_periods` time intervals, including the current
@@ -173,6 +177,97 @@ class Forecaster(abc.ABC):
         and wind production uncertainty.
         """
         ...
+
+    def plot_lmp_forecast(self, num_intervals, outfile=None):
+        """
+        Visualize forecasted LMPs, actual LMPs, and
+        uncertainty set.
+
+        Parameters
+        ----------
+        num_intervals : int
+            Number of intervals, starting from `self.current_time`,
+            for which to produce visualization.
+        outfile : None or path-like, optional
+            Output file for plot image.
+        """
+        # forecast uncertainty
+        lmp_set = self.forecast_price_uncertainty(num_intervals)
+
+        # get actual LMPs
+        periods = self.current_time + np.arange(num_intervals)
+        actual = self.historical_energy_prices(periods)
+
+        fig, ax = plt.subplots()
+
+        # now plot forecasted, actual, and uncertainty set
+        lmp_set.plot_set(
+            ax,
+            highlight_peak_effects=False,
+            offset=self.current_time,
+        )
+        ax.step(periods, actual, where="post", label="actual")
+
+        # axis labels
+        ax.set_xlabel("Period")
+        ax.set_ylabel("LMP ($/MWh)")
+
+        plt.legend()
+
+        if outfile is not None:
+            plt.savefig(outfile, bbox_inches="tight", dpi=300)
+
+        plt.close()
+
+    def plot_wind_forecast(
+            self,
+            num_intervals,
+            capacity_factors=False,
+            outfile=None,
+            ):
+        """
+        Visualize forecasted LMPs, actual LMPs, and
+        uncertainty set.
+
+        Parameters
+        ----------
+        num_intervals : int
+            Number of intervals, starting from `self.current_time`,
+            for which to produce visualization.
+        outfile : None or path-like, optional
+            Output file for plot image.
+        """
+        # forecast uncertainty
+        wind_set = self.forecast_wind_uncertainty(
+            num_intervals,
+            capacity_factors=capacity_factors,
+        )
+
+        periods = self.current_time + np.arange(num_intervals)
+
+        # get actual wind production
+        actual = self.historical_wind_production(
+            periods,
+            capacity_factors=capacity_factors,
+        )
+
+        fig, ax = plt.subplots()
+
+        # now plot forecasted, actual, and uncertainty set
+        # uncertainty set plot routine plots forecast
+        wind_set.plot_set(ax, offset=self.current_time)
+        ax.step(periods, actual, where="post", label="actual")
+
+        # axis labels
+        ax.set_xlabel("Period")
+        ax.set_ylabel("Wind Production (MWh)")
+
+        plt.legend()
+
+        if outfile is not None:
+            plt.savefig(outfile, bbox_inches="tight", dpi=300)
+
+        plt.close()
 
 
 class AbstractBus309Forecaster(Forecaster):
@@ -787,32 +882,20 @@ if __name__ == "__main__":
         "../../../../../results/wind_profile_data/309_wind_1_profiles.csv",
         n_prev_days=7,
         lmp_set_class=ConstantUncertaintyNonnegBoxSet,
-        wind_set_class=None,
+        wind_set_class=ConstantWindSet,
         wind_capacity=148.3,
         lmp_set_class_params={
             "uncertainty": 10,
         },
-        wind_set_class_params=None,
+        wind_set_class_params={
+            "uncertainty": 10,
+        },
         start=2000,
         first_period_certain=True,
     )
 
-    # get LMP uncertainty set for next 24 periods
-    hor_length = 24
-    lmp_set = forecaster.forecast_price_uncertainty(hor_length)
-    print(lmp_set.bounds())
-
-    # get actual LMPs
-    periods = forecaster.current_time + np.arange(hor_length)
-    actual_lmps = forecaster.historical_energy_prices(periods)
-
-    # plot LMP set and actual LMPs
-    fig, ax = plt.subplots()
-    ax.step(periods, actual_lmps, where="post", label="actual LMPs")
-    lmp_set.plot_set(ax, highlight_peak_effects=False, offset=2000)
-    plt.legend()
-    plt.savefig("test.png")
-    plt.close()
+    forecaster.plot_lmp_forecast(100, outfile="plot_lmp.png")
+    forecaster.plot_wind_forecast(100, outfile="plot_wind.png")
 
     lmp_params = [f"p[{idx}]" for idx in range(12)]
     wind_params = [f"w[{idx}]" for idx in range(12)]

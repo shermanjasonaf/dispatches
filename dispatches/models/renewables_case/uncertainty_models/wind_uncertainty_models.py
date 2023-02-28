@@ -170,18 +170,17 @@ class WindBoxSet(UncertaintySet):
         lower_bds = np.array([bounds[idx][0] for idx in range(len(bounds))])
         upper_bds = np.array([bounds[idx][1] for idx in range(len(bounds))])
 
-        color = "black"
-
         # generate the plots
-        ax.step(periods, upper_bds, "--", color="blue", linewidth=1.0,
+        ax.step(periods, upper_bds, "--", color="purple", linewidth=1.0,
                 where="post")
-        ax.step(periods, lower_bds, "--", color="blue", label="bounds",
+        ax.step(periods, lower_bds, "--", color="purple", label="bounds",
                 linewidth=1.0, where="post")
         ax.fill_between(periods, lower_bds, upper_bds, step="post",
-                        color="green", alpha=0.1, label="uncertainty")
+                        color="purple", alpha=0.1, label="uncertainty"
+                        )
 
-        # plot nominal production
-        ax.step(periods, self.sig_nom, color=color, label='nominal',
+        # plot nominal realization
+        ax.step(periods, self.sig_nom, color="black", label='nominal',
                 linewidth=1.8, where="post")
 
     def plot_set(self, ax, offset=0):
