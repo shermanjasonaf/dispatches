@@ -288,6 +288,7 @@ def _plot_lmp(ax, periods, lmp_values, lmp_set,
 def plot_power_output_results(
         mp_model,
         lmp_set=None,
+        wind_set=None,
         plot_lmp=True,
         plot_uncertainty=True,
         filename=None,
@@ -385,6 +386,10 @@ def plot_power_output_results(
         for _ in wind_capacities
     ]
 
+    # plot wind uncertainty
+    if wind_set is not None and plot_uncertainty:
+        wind_set.plot_set(ax1, offset=active_start)
+
     ax1.step(
         periods,
         np.array(wind_system_capacity) / 1000,
@@ -395,6 +400,14 @@ def plot_power_output_results(
         linestyle="dashed",
     )
     if periods[periods >= active_start].size > 0:
+        ax1.step(
+            periods[periods >= active_start],
+            np.array(wind_outputs)[periods >= active_start] / 1e3,
+            where="post",
+            label="wind production",
+            linewidth=1.8,
+            color="purple",
+        )
         ax1.step(
             periods[periods >= active_start],
             np.array(grid_elecs)[periods >= active_start] / 1e3,
@@ -410,14 +423,6 @@ def plot_power_output_results(
             linewidth=1.8,
             where="post",
             color="blue",
-        )
-        ax1.step(
-            periods[periods >= active_start],
-            np.array(wind_outputs)[periods >= active_start] / 1e3,
-            where="post",
-            label="wind production",
-            linewidth=1.8,
-            color="purple",
         )
         ax1.step(
             periods[periods >= active_start],
@@ -535,6 +540,7 @@ def plot_power_output_results(
 def plot_results(
         mp_model,
         lmp_set=None,
+        wind_set=None,
         plot_lmp=True,
         plot_uncertainty=True,
         start=None,
@@ -566,6 +572,7 @@ def plot_results(
     plot_power_output_results(
         mp_model,
         lmp_set=lmp_set,
+        wind_set=wind_set,
         plot_lmp=plot_lmp,
         plot_uncertainty=plot_uncertainty,
         custom_lmp_vals=custom_lmp_vals,
@@ -969,6 +976,7 @@ def create_two_stg_wind_battery_model(
             blk.fs.battery.charging_eta.set_value(charging_eta)
         if discharging_eta is not None:
             blk.fs.battery.discharging_eta.set_value(discharging_eta)
+        blk.fs.windpower.elec_from_capacity_factor.activate()
 
     if exclude_energy_throughputs:
         _exclude_energy_throughputs(model)
@@ -1078,6 +1086,7 @@ def advance_time(
     b.fs.battery.nameplate_power.fix(battery_power_capacity * 1e3)
     b.fs.battery.nameplate_energy.fix(battery_energy_capacity * 1e3)
     b.periodic_constraints[0].deactivate()
+    b.fs.windpower.elec_from_capacity_factor.activate()
 
     # simplifications to constraints on battery power flows/levels
     if exclude_energy_throughputs:
@@ -1117,6 +1126,10 @@ def advance_time(
     for con in m.component_data_objects(pyo.Constraint, active=True):
         if all(var.fixed for var in identify_variables(con.body)):
             con.deactivate()
+
+    # ensure wind capacity constraints are active
+    for blk in model.get_active_process_blocks():
+        blk.fs.windpower.elec_from_capacity_factor.activate()
 
 
 def update_wind_capacity_factors(model, new_factors):
@@ -1431,6 +1444,10 @@ def solve_rolling_horizon(
                 lmp_set=forecaster.forecast_price_uncertainty(
                     num_intervals=prediction_length,
                 ),
+                wind_set=forecaster.forecast_wind_uncertainty(
+                    num_intervals=prediction_length,
+                    capacity_factors=False,
+                ),
                 output_dir=os.path.join(output_dir, f"step_{idx}"),
                 lmp_bounds=lmp_bounds,
                 start=0,
@@ -1581,6 +1598,167 @@ def perform_incidence_analysis(model):
     print("Jacobian determinant", det(jacarr))
 
 
+def float_to_string(value, prefix="", postfix=""):
+    """
+    Convert floating point value to string
+    of form '{prefix}{sign}_{intpart}pt{decimal_places}{postfix}', where
+    {sign} is 'pl' or 'mn' (depending on sign of fraction).
+    """
+    if value == 0:
+        increment_str = ""
+    else:
+        sign_str = "pl_" if value > 0 else "mn_"
+
+        # remove +/- sign. Replace decimal point with 'pt'
+        num_str = (
+            str(value)
+            .replace("-", "")
+            .replace("+", "")
+            .replace(".", "pt")
+        )
+
+        # now put everything together
+        increment_str = prefix + sign_str + num_str + postfix
+
+    return increment_str
+
+
+def create_random_wind_lmp_datasets(base_dataset_file_path, output_dir):
+    """
+    Extend original 309 bus dataset to a collection of datasets,
+    as follows.
+
+    LMPs are:
+    - same as that in `base_dataset_file_path` (actual LMPs)
+    - drawn from a uniform distribution about the actual LMPs
+      (max(0, Uniform(LMP - 5, LMP + 5))) -> new dataset
+    - drawn from a uniform distribution about the actual LMPs
+      (max(0, Uniform(LMP - 10, LMP + 10))) -> new dataset
+
+    DA wind production levels are:
+    - same as that in `base_dataset_file_path` (actual production)
+    - drawn from a uniform distribution about the actual production
+      (max(0, Uniform(wind - 10, wind + 10))) -> new dataset
+    - drawn from a uniform distribution about the actual production
+      (max(0, Uniform(wind - 20, wind + 20))) -> new dataset
+    with LMPs all fixed at their actual values (i.e. values
+    from original dataset).
+
+    Then, 2 additional datasets generated by combining:
+    - Uniform(LMP+/ 5) with Uniform(wind+/-10)
+    - Uniform(LMP+/10) with Uniform(wind+/-20)
+
+    Returns
+    -------
+    output_dataset_paths : dict
+        Mapping from LMP histories to corresponding
+        dataset filepaths.
+    """
+    # get local filename and extension, verify extension is .csv
+    base_dataset_local_name = os.path.split(base_dataset_file_path)[-1]
+    base_dataset_fname, base_dataset_ext = os.path.splitext(
+        base_dataset_local_name
+    )
+    assert base_dataset_ext == ".csv"
+
+    os.makedirs(output_dir, exist_ok=False)
+    output_dataset_paths = {}
+
+    # open base dataset spreadsheet; write to output dir
+    actual_filename = os.path.join(output_dir, base_dataset_local_name)
+    df = pd.read_csv(base_dataset_file_path, index_col=0)
+    df.to_csv(actual_filename)
+    output_dataset_paths[("actual", "actual")] = actual_filename
+
+    def _perturb(
+            the_df,
+            col_name,
+            offset_max,
+            rng,
+            min_val=0,
+            max_val=None,
+            ):
+        """
+        Perturb all entries of dataframe column
+        by uniform random distribution. Force
+        nonnegativity
+        """
+        col_vals = the_df[col_name].to_numpy()
+        perturbed_vals = rng.uniform(
+            col_vals - offset_max,
+            col_vals + offset_max,
+        )
+        if min_val is not None:
+            perturbed_vals[perturbed_vals < min_val] = min_val
+        if max_val is not None:
+            perturbed_vals[perturbed_vals > max_val] = max_val
+
+        # check range
+        assert np.all(abs(perturbed_vals - col_vals) <= offset_max)
+
+        # now create new df with perturbed column
+        new_df = the_df.copy()
+        new_df[col_name] = perturbed_vals
+
+        return new_df
+
+    # perturb LMPs
+    rng = np.random.default_rng(123456)
+    for lmp_offset in (5, 10):
+        new_df = _perturb(df, "LMP DA", lmp_offset, rng)
+        output_filename = os.path.join(
+            output_dir,
+            f"{base_dataset_fname}_lmp_uniform{lmp_offset}.csv"
+        )
+        output_dataset_paths[(f"uniform{lmp_offset}", "actual")] = (
+            output_filename
+        )
+        new_df.to_csv(output_filename)
+
+    # perturb wind
+    for wind_offset in (10, 20):
+        new_df = _perturb(df, "Output DA", wind_offset, rng, max_val=148.3)
+        output_filename = os.path.join(
+            output_dir,
+            f"{base_dataset_fname}_wind_uniform{wind_offset}.csv"
+        )
+        output_dataset_paths[("actual", f"uniform{wind_offset}")] = (
+            output_filename
+        )
+        new_df.to_csv(output_filename)
+
+    # now combine perturbed LMP and wind
+    for lmp_offset, wind_offset in zip([5, 10], [10, 20]):
+        # retrieve LMP and wind DFs
+        lmp_df = pd.read_csv(
+            output_dataset_paths[(f"uniform{lmp_offset}", "actual")],
+            index_col=0,
+        )
+        wind_df = pd.read_csv(
+            output_dataset_paths[("actual", f"uniform{wind_offset}")],
+            index_col=0,
+        )
+
+        # now combined perturbed LMPs and wind capacities
+        new_df = lmp_df.copy()
+        new_df["Output DA"] = wind_df["Output DA"]
+
+        # export to file
+        output_filename = os.path.join(
+            output_dir,
+            f"{base_dataset_fname}_lmp_uniform{lmp_offset}"
+            f"_wind_uniform{wind_offset}.csv"
+        )
+        output_dataset_paths[
+            (f"uniform{lmp_offset}", f"uniform{wind_offset}")
+        ] = (
+            output_filename
+        )
+        new_df.to_csv(output_filename)
+
+    return output_dataset_paths
+
+
 def main():
     """
     Script for running the present module if main.
@@ -1611,14 +1789,14 @@ def main():
     simplify_uncertainty_set = True
 
     # settings for modifying dataset and forecasting
-    start = 2000
+    start = 1000
     perfect_information = False
     first_period_certain = True
     lmp_set_class = ConstantUncertaintyNonnegBoxSet
     wind_set_class = ConstantWindSet
     fractional_uncertainty = 0.2  # applies only if fractional set used
-    constant_lmp_uncertainty = 0   # applies iff constant LMP set used
-    constant_wind_uncertainty = 20  # applies iff constant wind set used
+    constant_lmp_uncertainty = 10  # applies iff constant LMP set used
+    constant_wind_uncertainty = 5  # applies iff constant wind set used
     lmp_history = "actual"
     wind_history = "actual"
 
@@ -1647,165 +1825,6 @@ def main():
         forecaster_class = Perfect309Forecaster
     else:
         forecaster_class = AvgSample309Backcaster
-
-    def float_to_string(value, prefix="", postfix=""):
-        """
-        Convert floating point value to string
-        of form '{prefix}{sign}_{intpart}pt{decimal_places}{postfix}', where
-        {sign} is 'pl' or 'mn' (depending on sign of fraction).
-        """
-        if value == 0:
-            increment_str = ""
-        else:
-            sign_str = "pl_" if value > 0 else "mn_"
-
-            # remove +/- sign. Replace decimal point with 'pt'
-            num_str = (
-                str(value)
-                .replace("-", "")
-                .replace("+", "")
-                .replace(".", "pt")
-            )
-
-            # now put everything together
-            increment_str = prefix + sign_str + num_str + postfix
-
-        return increment_str
-
-    def create_random_wind_lmp_datasets(base_dataset_file_path, output_dir):
-        """
-        Extend original 309 bus dataset to a collection of datasets,
-        as follows.
-
-        LMPs are:
-        - same as that in `base_dataset_file_path` (actual LMPs)
-        - drawn from a uniform distribution about the actual LMPs
-          (max(0, Uniform(LMP - 5, LMP + 5))) -> new dataset
-        - drawn from a uniform distribution about the actual LMPs
-          (max(0, Uniform(LMP - 10, LMP + 10))) -> new dataset
-
-        DA wind production levels are:
-        - same as that in `base_dataset_file_path` (actual production)
-        - drawn from a uniform distribution about the actual production
-          (max(0, Uniform(wind - 10, wind + 10))) -> new dataset
-        - drawn from a uniform distribution about the actual production
-          (max(0, Uniform(wind - 20, wind + 20))) -> new dataset
-        with LMPs all fixed at their actual values (i.e. values
-        from original dataset).
-
-        Then, 2 additional datasets generated by combining:
-        - Uniform(LMP+/ 5) with Uniform(wind+/-10)
-        - Uniform(LMP+/10) with Uniform(wind+/-20)
-
-        Returns
-        -------
-        output_dataset_paths : dict
-            Mapping from LMP histories to corresponding
-            dataset filepaths.
-        """
-        # get local filename and extension, verify extension is .csv
-        base_dataset_local_name = os.path.split(base_dataset_file_path)[-1]
-        base_dataset_fname, base_dataset_ext = os.path.splitext(
-            base_dataset_local_name
-        )
-        assert base_dataset_ext == ".csv"
-
-        os.makedirs(output_dir, exist_ok=False)
-        output_dataset_paths = {}
-
-        # open base dataset spreadsheet; write to output dir
-        actual_filename = os.path.join(output_dir, base_dataset_local_name)
-        df = pd.read_csv(base_dataset_file_path, index_col=0)
-        df.to_csv(actual_filename)
-        output_dataset_paths[("actual", "actual")] = actual_filename
-
-        def _perturb(
-                the_df,
-                col_name,
-                offset_max,
-                rng,
-                min_val=0,
-                max_val=None,
-                ):
-            """
-            Perturb all entries of dataframe column
-            by uniform random distribution. Force
-            nonnegativity
-            """
-            col_vals = the_df[col_name].to_numpy()
-            perturbed_vals = rng.uniform(
-                col_vals - offset_max,
-                col_vals + offset_max,
-            )
-            if min_val is not None:
-                perturbed_vals[perturbed_vals < min_val] = min_val
-            if max_val is not None:
-                perturbed_vals[perturbed_vals > max_val] = max_val
-
-            # check range
-            assert np.all(abs(perturbed_vals - col_vals) <= offset_max)
-
-            # now create new df with perturbed column
-            new_df = the_df.copy()
-            new_df[col_name] = perturbed_vals
-
-            return new_df
-
-        # perturb LMPs
-        rng = np.random.default_rng(123456)
-        for lmp_offset in (5, 10):
-            new_df = _perturb(df, "LMP DA", lmp_offset, rng)
-            output_filename = os.path.join(
-                output_dir,
-                f"{base_dataset_fname}_lmp_uniform{lmp_offset}.csv"
-            )
-            output_dataset_paths[(f"uniform{lmp_offset}", "actual")] = (
-                output_filename
-            )
-            new_df.to_csv(output_filename)
-
-        # perturb wind
-        for wind_offset in (10, 20):
-            new_df = _perturb(df, "Output DA", wind_offset, rng, max_val=148.3)
-            output_filename = os.path.join(
-                output_dir,
-                f"{base_dataset_fname}_wind_uniform{wind_offset}.csv"
-            )
-            output_dataset_paths[("actual", f"uniform{wind_offset}")] = (
-                output_filename
-            )
-            new_df.to_csv(output_filename)
-
-        # now combine perturbed LMP and wind
-        for lmp_offset, wind_offset in zip([5, 10], [10, 20]):
-            # retrieve LMP and wind DFs
-            lmp_df = pd.read_csv(
-                output_dataset_paths[(f"uniform{lmp_offset}", "actual")],
-                index_col=0,
-            )
-            wind_df = pd.read_csv(
-                output_dataset_paths[("actual", f"uniform{wind_offset}")],
-                index_col=0,
-            )
-
-            # now combined perturbed LMPs and wind capacities
-            new_df = lmp_df.copy()
-            new_df["Output DA"] = wind_df["Output DA"]
-
-            # export to file
-            output_filename = os.path.join(
-                output_dir,
-                f"{base_dataset_fname}_lmp_uniform{lmp_offset}"
-                f"_wind_uniform{wind_offset}.csv"
-            )
-            output_dataset_paths[
-                (f"uniform{lmp_offset}", f"uniform{wind_offset}")
-            ] = (
-                output_filename
-            )
-            new_df.to_csv(output_filename)
-
-        return output_dataset_paths
 
     # generate the LMP datasets
     random_dataset_dir = (
@@ -1954,6 +1973,8 @@ def main():
         simplify_battery_power_limits=simplify_battery_power_limits,
         simplify_uncertainty_set=simplify_uncertainty_set,
     )
+
+    pdb.set_trace()
 
     # set up RO model
     mdl = create_two_stg_wind_battery_model(
