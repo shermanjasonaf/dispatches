@@ -22,6 +22,7 @@ import pandas as pd
 import pyomo.environ as pyo
 import pyomo.contrib.pyros as pyros
 from pyomo.common.collections import ComponentSet
+from pyomo.common.timing import TicTocTimer
 from pyomo.core.expr.current import identify_variables
 from pyomo.contrib.pynumero.interfaces.pyomo_nlp import PyomoNLP
 from pyomo.contrib.incidence_analysis import IncidenceGraphInterface
@@ -1307,9 +1308,13 @@ def solve_rolling_horizon(
             "Revenue ($)",
             "Cost ($)",
             "Profit ($)",
+            "Solve time (wall s)",
             "Nonzero Nonstatic PyROS DR Vars (kW/($/MWh))",
         ],
     )
+
+    # timer for solvers
+    timer = TicTocTimer()
 
     for idx in range(num_steps):
         # solve the model
@@ -1340,6 +1345,7 @@ def solve_rolling_horizon(
                 capacity_factors=True,
             )
 
+            timer.tic(msg=f"Solving step {idx}")
             res = solver.solve(
                 model.pyomo_model,
                 first_stage_vars,
@@ -1348,14 +1354,17 @@ def solve_rolling_horizon(
                 uncertainty_set,
                 **solver_kwargs,
             )
+            solve_time = timer.toc(msg=f"Done solving step {idx}")
 
             nonzero_nonstatic_dr_vars = res.solver.nonzero_nonstatic_dr_vars
         else:
+            timer.tic(msg=f"Solving step {idx}")
             res = solver.solve(
                 model.pyomo_model,
                 load_solutions=False,
                 **solver_kwargs,
             )
+            solve_time = timer.toc(msg=f"Done solving step {idx}")
             nonzero_nonstatic_dr_vars = None
 
         if pyo.check_optimal_termination(res):
@@ -1530,6 +1539,7 @@ def solve_rolling_horizon(
                 revenue,
                 cost,
                 profit,
+                solve_time,
                 nonzero_nonstatic_dr_vars,
             )
 
@@ -1544,6 +1554,7 @@ def solve_rolling_horizon(
             #       model was advanced (and hence, before LMPs updated)
             total_revenue = accumul_results_df["Revenue ($)"].sum()
             logging.info(f"Total accumulated revenue: ${total_revenue:.2f}")
+
     return accumul_results_df
 
 
