@@ -1747,6 +1747,229 @@ def float_to_string(value, prefix="", postfix=""):
     return increment_str
 
 
+def _perturb(
+        the_df,
+        col_name,
+        offset_max,
+        rng,
+        min_val=0,
+        max_val=None,
+        ):
+    """
+    Perturb all entries of dataframe column
+    by uniform random distribution, while forcing
+    values to be within specified bounds.
+
+    Parameters
+    ----------
+    the_df : pandas.DataFrame
+        Dataframe of interest.
+    col_name : str-like
+        Name/key of dataframe column to perturb.
+        Note that entries must be numeric type.
+    offset_max : float
+        'Radius' of perturbation of the column entries.
+    rng : np.random._generator.Generator
+        Random number generator for uniform distribution.
+    min_val : float or None, optional
+        After entries are perturbed by uniform distribution,
+        entries of value less than this number will be set
+        to this number. If `None` is passed, then ignored.
+    max_val : float or None, optional
+        After entries are perturbed by uniform distribution,
+        entries of value greater than this number will be set
+        to this number. If `None` is passed, then ignored.
+
+    Returns
+    -------
+    new_df : pandas.DataFrame
+        (Deep) copy of dataframe `the_df`, with entries of
+        specified column `col_name` perturbed.
+    """
+
+    col_vals = the_df[col_name].to_numpy()
+    perturbed_vals = rng.uniform(
+        col_vals - offset_max,
+        col_vals + offset_max,
+    )
+
+    if min_val is not None:
+        perturbed_vals[perturbed_vals < min_val] = min_val
+    if max_val is not None:
+        perturbed_vals[perturbed_vals > max_val] = max_val
+
+    # check range
+    assert np.all(abs(perturbed_vals - col_vals) <= offset_max)
+
+    # now create new df with perturbed column
+    new_df = the_df.copy(deep=True)
+    new_df[col_name] = perturbed_vals
+
+    return new_df
+
+
+class Bus309LMPWindDatabase:
+    """
+    Interface to a directory containing LMP and wind
+    time series data. Structure of directory:
+
+    - base:
+      - base_dataset.csv
+        Base dataset.
+      - config.csv
+        Single column csv with following information:
+        - num_scenarios: number of scenarios
+        - lmp_perturbed_by: amount by which DA LMPs were perturbed
+          in $/MWh
+        - wind_perturbed_by: amount by which wind production caps were
+          perturbed, in MW
+        - lmp_lower_bound: lower bound for LMPs, $/MWh
+        - lmp_upper_bound: upper bound for LMPs, $/MWh
+        - wind_lower_bound: lower bound for wind capacity, MW
+        - wind_upper_bound: upper bound for wind capacities, MW
+          This is equal to the wind plant system capacity
+        Number of scenarios, and parameters of uniform
+        distribution used to perturb dataset.
+    - lmp_perturbed:
+      Base dataset with DA LMP values perturbed by uniform
+      distribution.
+      - dataset_lmp_perturbed_{i}.csv (for {i}=1,2,...,num_scenarios)
+    - wind_perturbed:
+      base dataset with DA wind output perturbed by
+      uniform distribution
+      - dataset_wind_perturbed_{i}.csv (for {i}=1,2,...,num_scenarios)
+    - lmp_wind_perturbed:
+      Base dataset with DA lmp and wind output perturbed
+      by uniform distribution
+      - dataset_lmp_wind_perturbed_{i}.csv
+        (for {i}=1,2,...,num_scenarios)
+    """
+    subdirs = [
+        "base",
+        "lmp_perturbed",
+        "wind_perturbed",
+        "lmp_wind_perturbed",
+    ]
+
+    def __init__(self, indir):
+        """Initialize self (see class docstring)."""
+        assert os.path.exists(indir)
+        assert set(self.subdirs).issubset(set(os.listdir(indir)))
+        self.indir = indir
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}({self.indir!r})"
+
+    def get_config(self):
+        config_file = os.path.join(self.indir, "base", "config.csv")
+        return pd.read_csv(config_file, index_col=0)["0"]
+
+    def get_base_dataset_file(self):
+        return os.path.join(self.indir, "base", "base_dataset.csv")
+
+    def get_base_dataset_df(self):
+        return pd.read_csv(self.get_base_dataset_file(), index_col=0)
+
+    def get_perturbed_dataset_file(self, perturb_type, scenario_num):
+        assert perturb_type in {"lmp", "wind", "lmp_wind"}
+        return os.path.join(
+            self.indir,
+            f"{perturb_type}_perturbed",
+            f"{perturb_type}_perturbed_{scenario_num}.csv",
+        )
+
+    def get_perturbed_dataset_df(self, perturb_type, scenario_num):
+        filepath = self.get_perturbed_dataset_file(perturb_type, scenario_num)
+        return pd.read_csv(filepath, index_col=0)
+
+    @classmethod
+    def create_database(
+            cls,
+            base_file,
+            output_dir,
+            num_scenarios,
+            perturb_lmp_by,
+            perturb_wind_by,
+            rng_seed=123456,
+            lmp_bounds=(0, None),
+            wind_bounds=(0, None),
+            ):
+        """
+        Create database from base time series.
+        """
+        os.mkdir(output_dir)
+
+        # first, read, then write, base dataframe
+        base_dir = os.path.join(output_dir, "base")
+        os.mkdir(os.path.join(output_dir, "base"))
+        base_df = pd.read_csv(base_file, index_col=0)
+        base_df.to_csv(os.path.join(base_dir, "base_dataset.csv"))
+
+        # write config
+        config_ser = pd.Series(dict(
+            num_scenarios=num_scenarios,
+            perturb_lmp_by=perturb_lmp_by,
+            perturb_wind_by=perturb_wind_by,
+            rng_seed=rng_seed,
+            lmp_lower_bound=lmp_bounds[0],
+            lmp_upper_bound=lmp_bounds[1],
+            wind_lower_bound=wind_bounds[0],
+            wind_upper_bound=wind_bounds[1],
+        ))
+        config_ser.to_csv(os.path.join(base_dir, "config.csv"))
+
+        # generate dataframes for LMP, wind, and LMP + wind
+        lmp_dir = os.path.join(output_dir, "lmp_perturbed")
+        wind_dir = os.path.join(output_dir, "wind_perturbed")
+        lmp_wind_dir = os.path.join(output_dir, "lmp_wind_perturbed")
+
+        # make subdirectories
+        for dirpath in [lmp_dir, wind_dir, lmp_wind_dir]:
+            os.mkdir(dirpath)
+
+        # set up random number generator
+        rng = np.random.default_rng(rng_seed)
+
+        # now generate and write the spreadsheets
+        for idx in range(num_scenarios):
+            scenario_df = base_df.copy()
+            if idx == 0:
+                # note: scenario 0 is the base dataset scenario
+                lmp_df = wind_df = lmp_wind_df = scenario_df.copy()
+            else:
+                # perturb LMP and wind series
+                lmp_df = _perturb(
+                    scenario_df,
+                    "LMP DA",
+                    perturb_lmp_by,
+                    rng,
+                    min_val=lmp_bounds[0],
+                    max_val=lmp_bounds[1],
+                )
+                wind_df = _perturb(
+                    scenario_df,
+                    "Output DA",
+                    perturb_wind_by,
+                    rng,
+                    min_val=wind_bounds[0],
+                    max_val=wind_bounds[1],
+                )
+                lmp_wind_df = lmp_df.copy()
+                lmp_wind_df["Output DA"] = wind_df["Output DA"].copy()
+
+            lmp_df.to_csv(
+                os.path.join(lmp_dir, f"lmp_perturbed_{idx}.csv"),
+            )
+            wind_df.to_csv(
+                os.path.join(wind_dir, f"wind_perturbed_{idx}.csv"),
+            )
+            lmp_wind_df.to_csv(
+                os.path.join(lmp_wind_dir, f"lmp_wind_perturbed_{idx}.csv"),
+            )
+
+        return cls(output_dir)
+
+
 def create_random_wind_lmp_datasets(base_dataset_file_path, output_dir):
     """
     Extend original 309 bus dataset to a collection of datasets,
@@ -1793,38 +2016,6 @@ def create_random_wind_lmp_datasets(base_dataset_file_path, output_dir):
     df = pd.read_csv(base_dataset_file_path, index_col=0)
     df.to_csv(actual_filename)
     output_dataset_paths[("actual", "actual")] = actual_filename
-
-    def _perturb(
-            the_df,
-            col_name,
-            offset_max,
-            rng,
-            min_val=0,
-            max_val=None,
-            ):
-        """
-        Perturb all entries of dataframe column
-        by uniform random distribution. Force
-        nonnegativity
-        """
-        col_vals = the_df[col_name].to_numpy()
-        perturbed_vals = rng.uniform(
-            col_vals - offset_max,
-            col_vals + offset_max,
-        )
-        if min_val is not None:
-            perturbed_vals[perturbed_vals < min_val] = min_val
-        if max_val is not None:
-            perturbed_vals[perturbed_vals > max_val] = max_val
-
-        # check range
-        assert np.all(abs(perturbed_vals - col_vals) <= offset_max)
-
-        # now create new df with perturbed column
-        new_df = the_df.copy()
-        new_df[col_name] = perturbed_vals
-
-        return new_df
 
     # perturb LMPs
     rng = np.random.default_rng(123456)
