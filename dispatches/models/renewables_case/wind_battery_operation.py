@@ -1595,6 +1595,8 @@ class RollingHorizonResults:
         the_df = df.copy(deep=True)
 
         # add solve time column if necessary
+        # done to support older versions of spreadsheet,
+        # which do not include solve time column
         if self.attr_to_col_map["solve_time"] not in the_df.columns:
             the_df[self.attr_to_col_map["solve_time"]] = None
             the_df = the_df[col_names]
