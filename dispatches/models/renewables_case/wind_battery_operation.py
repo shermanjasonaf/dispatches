@@ -1555,7 +1555,111 @@ def solve_rolling_horizon(
             total_revenue = accumul_results_df["Revenue ($)"].sum()
             logging.info(f"Total accumulated revenue: ${total_revenue:.2f}")
 
-    return accumul_results_df
+    return RollingHorizonResults(df=accumul_results_df)
+
+
+class RollingHorizonResults:
+    """
+    Container for results of rolling horizon study.
+    Underlying dataframe is meant to be immutable after
+    instantiation.
+    """
+
+    attr_to_col_map = {
+        "wind_production": "Wind Production (MW)",
+        "wind_to_grid": "Wind-to-Grid (MW)",
+        "batt_to_grid": "Battery-to-Grid (MW)",
+        "bat_storage": "Battery storage (MWh)",
+        "lmp": "Energy Price ($/MWh)",
+        "revenue": "Revenue ($)",
+        "op_cost": "Cost ($)",
+        "profit": "Profit ($)",
+        "solve_time": "Solve time (wall s)",
+        "nonzero_nonstatic_dr_vars": (
+            "Nonzero Nonstatic PyROS DR Vars (kW/($/MWh))"
+        ),
+    }
+
+    def __init__(self, df):
+        """Initialize self (see docstring)."""
+        # validate columns
+        col_names = df.columns.tolist()
+        if col_names == list(self.attr_to_col_map.values()):
+            cols_ok = True
+        else:
+            col_names.insert(-1, self.attr_to_col_map["solve_time"])
+            cols_ok = (col_names == list(self.attr_to_col_map.values()))
+        assert cols_ok, f"Columns {col_names} not valid"
+
+        # copy dataframe
+        the_df = df.copy(deep=True)
+
+        # add solve time column if necessary
+        if self.attr_to_col_map["solve_time"] not in the_df.columns:
+            the_df[self.attr_to_col_map["solve_time"]] = None
+            the_df = the_df[col_names]
+
+        # set underlying dataframe
+        self._df = the_df[col_names]
+
+    @property
+    def df(self):
+        """Return deepcopy of underlying dataframe of self."""
+        return self._df.copy(deep=True)
+
+    def __getattr__(self, name):
+        if name in self.attr_to_col_map:
+            # return copy of the series
+            return self._df[self.attr_to_col_map[name]].copy()
+        else:
+            return super().__getattribute__(name)
+
+    def __setattr__(self, name, val):
+        if name in self.attr_to_col_map:
+            raise AttributeError(f"Can't set attribute {name!r}")
+        else:
+            return super().__setattr__(name, val)
+
+    def eval_total_revenue(self):
+        """
+        Evaluate total revenue.
+        """
+        return self.revenue.sum()
+
+    def eval_total_solve_time(self):
+        """
+        Return total rolling horizon solver time in seconds.
+        """
+        return self.solve_time.sum()
+
+    def report_nonzero_nonstatic_dr_vars(self, tol=1e-4):
+        """
+        Report nonstatic decision rule variables with
+        absolute value beyond specified tolerance.
+
+        Returns
+        -------
+        nonzero_vars : dict
+            Mapping from dataframe index values to dict
+            mapping names to values of all variables of
+            absolute value exceeding `tol`.
+            Only index values for which at least one such
+            variable is found are included in the dict
+            returned.
+        """
+        nonzero_vars = {}
+        for step, vars_str in self.nonzero_nonstatic_dr_vars.items():
+            if pd.isnull(vars_str):
+                continue
+            vars_dict = eval(vars_str)
+            nonzero_vars_dict = {
+                name: val for name, val in vars_dict.items()
+                if abs(val) > tol
+            }
+            if nonzero_vars_dict:
+                nonzero_vars[step] = nonzero_vars_dict
+
+        return nonzero_vars
 
 
 def perform_incidence_analysis(model):
