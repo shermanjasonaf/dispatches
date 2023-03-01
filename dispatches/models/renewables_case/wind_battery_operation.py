@@ -1154,6 +1154,7 @@ def solve_rolling_horizon(
         control_length,
         num_steps,
         output_dir=None,
+        produce_plots=False,
         solver_kwargs=None,
         charging_eta=None,
         discharging_eta=None,
@@ -1191,6 +1192,8 @@ def solve_rolling_horizon(
         If `None` is provided, then no plots
         are produced. If a path is provided, plots are generated,
         and exported to this directory.
+    produce_plots : bool, optional
+        Generate plots and write to `output_dir`.
     solver_kwargs : dict, optional
         Keyword arguments to the method `solver.solve()`.
     charging_eta : float or None, optional
@@ -1253,9 +1256,12 @@ def solve_rolling_horizon(
     else:
         assert "load_solutions" not in solver_kwargs
 
-    # get LMP axis bounds for plotting
     if output_dir is not None:
-        if forecaster.lmp_set_class is not None:
+        # create output directory
+        os.mkdir(output_dir)
+
+        # get LMP axis bounds for plotting
+        if produce_plots and forecaster.lmp_set_class is not None:
             temp_forecaster = forecaster.copy()
 
             lmp_sets = []
@@ -1438,24 +1444,25 @@ def solve_rolling_horizon(
             else:
                 custom_lmp_vals = None
 
-            plot_results(
-                model,
-                highlight_active_periods=True,
-                lmp_set=forecaster.forecast_price_uncertainty(
-                    num_intervals=prediction_length,
-                ),
-                wind_set=forecaster.forecast_wind_uncertainty(
-                    num_intervals=prediction_length,
-                    capacity_factors=False,
-                ),
-                output_dir=os.path.join(output_dir, f"step_{idx}"),
-                lmp_bounds=lmp_bounds,
-                start=0,
-                stop=model.current_time + prediction_length - 1,
-                xmax=(num_steps - 1) * control_length + prediction_length,
-                plot_uncertainty=is_pyros,
-                custom_lmp_vals=custom_lmp_vals,
-            )
+            if produce_plots:
+                plot_results(
+                    model,
+                    highlight_active_periods=True,
+                    lmp_set=forecaster.forecast_price_uncertainty(
+                        num_intervals=prediction_length,
+                    ),
+                    wind_set=forecaster.forecast_wind_uncertainty(
+                        num_intervals=prediction_length,
+                        capacity_factors=False,
+                    ),
+                    output_dir=os.path.join(output_dir, f"step_{idx}"),
+                    lmp_bounds=lmp_bounds,
+                    start=0,
+                    stop=model.current_time + prediction_length - 1,
+                    xmax=(num_steps - 1) * control_length + prediction_length,
+                    plot_uncertainty=is_pyros,
+                    custom_lmp_vals=custom_lmp_vals,
+                )
 
         # advance the model and forecaster in time,
         # extend LMP signal,
@@ -1972,6 +1979,7 @@ def main():
         exclude_energy_throughputs=excl_throughputs,
         simplify_battery_power_limits=simplify_battery_power_limits,
         simplify_uncertainty_set=simplify_uncertainty_set,
+        produce_plots=False,
     )
 
     pdb.set_trace()
@@ -2019,6 +2027,7 @@ def main():
         simplify_battery_power_limits=simplify_battery_power_limits,
         simplify_uncertainty_set=simplify_uncertainty_set,
         solver_kwargs=pyros_kwargs,
+        produce_plots=False,
     )
     pdb.set_trace()
 
