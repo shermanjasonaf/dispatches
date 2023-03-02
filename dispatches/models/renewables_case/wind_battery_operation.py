@@ -1893,9 +1893,50 @@ class Bus309LMPWindDatabase:
             rng_seed=123456,
             lmp_bounds=(0, None),
             wind_bounds=(0, None),
+            one_scenario_dir=None,
             ):
         """
         Create database from base time series.
+
+        Parameters
+        ----------
+        base_file : path-like
+            Path to dataset from which to generate the database.
+        output_dir : path-like
+            Path to output directory. Will be created with
+            `os.mkdir`.
+        num_scenarios : int
+            Number of perturbed datasets to generate
+            for each type of perturbation (lmp, wind, lmp+wind).
+        perturb_lmp_by : float
+            Amount by which to perturb DA LMPs.
+        perturb_wind : float
+            Amount by which to perturb DA wind Output.
+        rng_seed : int
+            Seed for random number generator used to perturb
+            base dataset.
+        lmp_bounds : tuple of {float, None}, optional
+            Bounds for LMPs to enforce after perturbation by
+            random numbers.
+        wind_bounds : tuple of {float, None}, optional
+            Bounds for wind capacities to enforce after perturbation by
+            random numbers.
+        one_scenario_dir : path-like, optional
+            Path to directory containing the following files:
+
+            - '309_wind_1_profiles_lmp_uniform{perturb_lmp_by}.csv'
+            - '309_wind_1_profiles_wind_uniform{perturb_wind_by}.csv'
+            - '309_wind_1_profiles_lmp_uniform{perturb_lmp_by}'
+              '_wind_{perturb_wind_by}.csv'
+
+            These files will be used to generate one of the
+            `num_scenarios` perturbed datasets for each perturbation
+            type.
+
+        Returns
+        -------
+        : Bus309LMPWindDatabase (or subclass thereof)
+            The database.
         """
         os.mkdir(output_dir)
 
@@ -1932,11 +1973,27 @@ class Bus309LMPWindDatabase:
 
         # now generate and write the spreadsheets
         for idx in range(num_scenarios):
-            scenario_df = base_df.copy()
-            if idx == 0:
-                # note: scenario 0 is the base dataset scenario
-                lmp_df = wind_df = lmp_wind_df = scenario_df.copy()
+            if idx == 0 and one_scenario_dir is not None:
+                # in case we want to use time series from
+                # previous workflows
+                lmp_df_file = os.path.join(
+                    one_scenario_dir,
+                    f"309_wind_1_profiles_lmp_uniform{perturb_lmp_by}.csv",
+                )
+                wind_df_file = os.path.join(
+                    one_scenario_dir,
+                    f"309_wind_1_profiles_wind_uniform{perturb_wind_by}.csv",
+                )
+                lmp_wind_df_file = os.path.join(
+                    one_scenario_dir,
+                    f"309_wind_1_profiles_lmp_uniform{perturb_lmp_by}"
+                    f"_wind_uniform{perturb_wind_by}.csv",
+                )
+                lmp_df = pd.read_csv(lmp_df_file, index_col=0)
+                wind_df = pd.read_csv(wind_df_file, index_col=0)
+                lmp_wind_df = pd.read_csv(lmp_wind_df_file, index_col=0)
             else:
+                scenario_df = base_df.copy()
                 # perturb LMP and wind series
                 lmp_df = _perturb(
                     scenario_df,
@@ -2091,6 +2148,25 @@ def main():
         )
     from dispatches.models.renewables_case.uncertainty_models.\
         forecaster import Perfect309Forecaster, AvgSample309Backcaster
+
+    # basefile = (
+    #     "../../../../results/wind_profile_data/309_wind_1_profiles.csv"
+    # )
+    # db = Bus309LMPWindDatabase.create_database(
+    #     basefile,
+    #     "../../../../results/wind_profile_data/multiple_datasets/example",
+    #     num_scenarios=100,
+    #     perturb_lmp_by=10,
+    #     perturb_wind_by=20,
+    #     rng_seed=123456,
+    #     lmp_bounds=(0, None),
+    #     wind_bounds=(0, 148.3),
+    #     one_scenario_dir=(
+    #         "../../../../results/wind_profile_data/test_random_histories"
+    #     ),
+    # )
+    # print(db)
+    # pdb.set_trace()
 
     # horizon lengths
     horizon = 12
