@@ -1971,6 +1971,10 @@ class Bus309LMPWindDatabase:
         # set up random number generator
         rng = np.random.default_rng(rng_seed)
 
+        # ensure no repeats of LMP scenario 0 and 1,
+        # particularly if `one_scenario_dir` provided
+        rng.uniform(5, 10, 10000)
+
         # now generate and write the spreadsheets
         for idx in range(num_scenarios):
             if idx == 0 and one_scenario_dir is not None:
@@ -2129,6 +2133,333 @@ def create_random_wind_lmp_datasets(base_dataset_file_path, output_dir):
         new_df.to_csv(output_filename)
 
     return output_dataset_paths
+
+
+def solve_rho_for_scenario(
+        database,
+        scenario_idx,
+        perturbation_type,
+        prediction_horizon_length,
+        forecaster_class,
+        forecaster_kwargs,
+        model_kwargs,
+        rho_solver_kwargs,
+        base_output_dir,
+        ):
+    """
+    Rolling horizon optimization for wind-battery model.
+    """
+    scenario_filepath = database.get_perturbed_dataset_file(
+        perturbation_type,
+        scenario_idx,
+    )
+
+    # construct forecaster
+    forecaster = forecaster_class(
+        scenario_filepath,
+        wind_capacity=database.get_config().wind_upper_bound,
+        **forecaster_kwargs,
+    )
+
+    # construct model
+    lmp_signal = forecaster.forecast_energy_prices(
+        num_intervals=prediction_horizon_length,
+    )
+    wind_cfs = forecaster.forecast_wind_production(
+        num_intervals=prediction_horizon_length,
+        capacity_factors=True,
+    )
+    model = create_two_stg_wind_battery_model(
+        lmp_signal=lmp_signal,
+        wind_cfs=wind_cfs,
+        wind_capacity=forecaster.wind_capacity,
+        **model_kwargs,
+    )
+
+    # solve rolling horizon (and output results, as necessary)
+    return scenario_idx, solve_rolling_horizon(
+        model=model,
+        forecaster=forecaster,
+        output_dir=os.path.join(base_output_dir, f"scenario_{scenario_idx}"),
+        **rho_solver_kwargs,
+    )
+
+
+def solve_rolling_horizon_database(
+        database,
+        scenario_idxs,
+        perturbation_type,
+        max_parallel_scenarios,
+        prediction_horizon_length,
+        rho_solver_kwargs,
+        forecaster_class,
+        forecaster_kwargs,
+        model_kwargs,
+        output_dir,
+        ):
+    """
+    Perform wind battery model rolling horizon simulation for
+    a collection of datasets.
+    """
+    from concurrent.futures import ProcessPoolExecutor
+    from itertools import repeat
+    from math import ceil
+
+    # create output dir
+    os.mkdir(output_dir)
+
+    # TODO: log all settings
+
+    # resolve default database scenario numbers
+    if scenario_idxs is None:
+        scenario_idxs = list(range(database.get_config().num_scenarios))
+    else:
+        scenario_idxs = list(scenario_idxs)
+
+    results_dict = dict()
+    if max_parallel_scenarios == 1:
+        # solve serially
+        for scen_idx in scenario_idxs:
+            _, results_dict[scen_idx] = solve_rho_for_scenario(
+                database,
+                scen_idx,
+                perturbation_type=perturbation_type,
+                prediction_horizon_length=prediction_horizon_length,
+                forecaster_class=forecaster_class,
+                forecaster_kwargs=forecaster_kwargs,
+                model_kwargs=model_kwargs,
+                rho_solver_kwargs=rho_solver_kwargs,
+                base_output_dir=output_dir,
+            )
+    else:
+        # solve concurrently
+        num_batches = ceil(len(scenario_idxs) / max_parallel_scenarios)
+        scenario_idx_batches = []
+        for batch_idx in range(num_batches):
+            start_idx = batch_idx * max_parallel_scenarios
+            end_idx = start_idx + max_parallel_scenarios
+            scenario_idx_batches.append(scenario_idxs[start_idx:end_idx])
+
+        for scenario_idx_batch in scenario_idx_batches:
+            with ProcessPoolExecutor(max_parallel_scenarios) as executor:
+                batch_results = executor.map(
+                    solve_rho_for_scenario,
+                    repeat(database),
+                    scenario_idx_batch,
+                    repeat(perturbation_type),
+                    repeat(prediction_horizon_length),
+                    repeat(forecaster_class),
+                    repeat(forecaster_kwargs),
+                    repeat(model_kwargs),
+                    repeat(rho_solver_kwargs),
+                    repeat(output_dir),
+                )
+                for idx, res in batch_results:
+                    results_dict[idx] = res
+
+    for idx, the_res in results_dict.items():
+        print(idx, the_res.eval_total_revenue())
+    pdb.set_trace()
+
+    return results_dict
+
+
+def visualize_accumulated_revenues(**rho_results):
+    """
+    Visualize accumulated revenues for a sequence of
+    rolling horizon optimization results with a plot of total
+    revenue vs scenario index.
+
+    Parameters
+    ----------
+    **rho_results : dict
+        Each entry maps a string to a dict which itself
+        maps scenario indexes to RollingHorizonResults
+        objects.
+    """
+    pass
+
+
+def new_workflow(
+        perturbation_type="lmp",
+        prediction_horizon_length=12,
+        optimization_type="det_perfect",
+        lmp_wind_perturb_params=(10, 20),
+        scenario_idxs=None,
+        max_parallel_scenarios=None,
+        starting_interval=2000,
+        ):
+    """
+    Script for new workflow.
+    """
+    from dispatches.models.renewables_case.uncertainty_models.\
+        forecaster import Perfect309Forecaster, AvgSample309Backcaster
+    from dispatches.models.renewables_case.uncertainty_models.\
+        lmp_uncertainty_models import (
+            ConstantUncertaintyNonnegBoxSet as ConstantLMPSet
+        )
+    from dispatches.models.renewables_case.uncertainty_models.\
+        wind_uncertainty_models import (
+            ConstantUncertaintyNonnegBoxSet as ConstantWindSet
+        )
+    import multiprocessing as mp
+
+    if max_parallel_scenarios is None:
+        max_parallel_scenarios = mp.cpu_count()
+
+    assert prediction_horizon_length in {12, 15, 18}
+
+    for lp, wp in [(5, 10), (10, 20)]:
+        # make two databases of interest if they don't already exist
+        output_db_path = (
+            "../../../../results/wind_profile_data/multiple_datasets/"
+            f"309_database_2022-03-02_lmp_uniform{lp}_"
+            f"wind_uniform{wp}"
+        )
+        if not os.path.exists(output_db_path):
+            Bus309LMPWindDatabase.create_database(
+                (
+                    "../../../../results/wind_profile_data/"
+                    "309_wind_1_profiles.csv"
+                ),
+                output_db_path,
+                num_scenarios=100,
+                perturb_lmp_by=lp,
+                perturb_wind_by=wp,
+                lmp_bounds=(0, None),
+                wind_bounds=(0, 148.3),
+                one_scenario_dir=(
+                    "../../../../results/wind_profile_data/"
+                    "test_random_histories"
+                ),
+            )
+
+    lmp_pert, wind_pert = lmp_wind_perturb_params
+    db_path = (
+        "../../../../results/wind_profile_data/multiple_datasets/"
+        f"309_database_2022-03-02_lmp_uniform{lmp_pert}_"
+        f"wind_uniform{wind_pert}"
+    )
+    database = Bus309LMPWindDatabase(db_path)
+
+    if scenario_idxs is None:
+        scenario_idxs = list(range(10))
+
+    valid_optimization_types = {
+        "det_perfect",
+        "det_imperfect",
+        "ro_imperfect",
+    }
+    assert optimization_type in valid_optimization_types
+
+    if optimization_type == "det_perfect":
+        forecaster_class = Perfect309Forecaster
+    else:
+        forecaster_class = AvgSample309Backcaster
+
+    # uncertainty modeling for forecaster
+    # ensure correct for RO
+    if perturbation_type == "lmp":
+        lmp_set_class = ConstantLMPSet
+        lmp_set_class_params = {"uncertainty": 10}
+        wind_set_class = None
+        wind_set_class_params = None
+    elif perturbation_type == "wind":
+        lmp_set_class = None
+        lmp_set_class_params = None
+        wind_set_class = ConstantWindSet
+        wind_set_class_params = {"uncertainty": 20}
+    else:  # lmp_wind
+        lmp_set_class = ConstantLMPSet
+        lmp_set_class_params = {"uncertainty": 10}
+        wind_set_class = ConstantWindSet
+        wind_set_class_params = {"uncertainty": 20}
+
+    forecaster_kwargs = dict(
+        n_prev_days=7,
+        lmp_set_class=lmp_set_class,
+        lmp_set_class_params=lmp_set_class_params,
+        wind_set_class=wind_set_class,
+        wind_set_class_params=wind_set_class_params,
+        first_period_certain=True,
+        start=starting_interval,
+    )
+
+    batt_capacity = 25
+    batt_charging_efficiency = 0.95
+    exclude_energy_throughputs = True
+    simplify_battery_power_limits = True
+    simplify_uncertainty_set = True
+
+    model_kwargs = dict(
+        battery_capacity=batt_capacity,
+        exclude_energy_throughputs=exclude_energy_throughputs,
+        simplify_battery_power_limits=simplify_battery_power_limits,
+        charging_eta=batt_charging_efficiency,
+        discharging_eta=batt_charging_efficiency,
+    )
+
+    gurobi = pyo.SolverFactory("gurobi", options={"NonConvex": 2})
+    baron = pyo.SolverFactory(
+        "baron",
+        executable="~/opt/baron/baron_2023-02-27/baron-lin64/baron",
+        options={"LPSol": 3, "CplexLibName": "libcplex2010.so"},
+    )
+
+    if optimization_type == "ro_imperfect":
+        solver = pyo.SolverFactory("pyros")
+        solver_kwargs = dict(
+            local_solver=gurobi,
+            global_solver=gurobi,
+            backup_local_solvers=[baron],
+            backup_global_solvers=[baron],
+            decision_rule_order=1,
+            bypass_local_separation=True,
+            objective_focus=pyros.ObjectiveType.worst_case,
+            solve_master_globally=True,
+            keepfiles=True,
+            load_solution=True,
+            output_verbose_results=True,
+            subproblem_file_directory=None,
+        )
+    else:
+        solver = gurobi
+        solver_kwargs = dict()
+
+    rho_solver_kwargs = dict(
+        solver=solver,
+        solver_kwargs=solver_kwargs,
+        control_length=1,
+        num_steps=100,
+        produce_plots=False,
+        charging_eta=batt_charging_efficiency,
+        discharging_eta=batt_charging_efficiency,
+        exclude_energy_throughputs=exclude_energy_throughputs,
+        simplify_battery_power_limits=simplify_battery_power_limits,
+        simplify_uncertainty_set=simplify_uncertainty_set,
+    )
+
+    output_dir = (
+        "../../../../results/wind_lmp_multiscenario_results/"
+        f"res_{optimization_type}_"
+        f"lmp_uniform{lmp_pert}_wind_uniform{wind_pert}_"
+        f"perturb_{perturbation_type}"
+    )
+
+    all_results = solve_rolling_horizon_database(
+        database,
+        scenario_idxs=scenario_idxs,
+        perturbation_type=perturbation_type,
+        max_parallel_scenarios=max_parallel_scenarios,
+        prediction_horizon_length=prediction_horizon_length,
+        rho_solver_kwargs=rho_solver_kwargs,
+        forecaster_class=forecaster_class,
+        forecaster_kwargs=forecaster_kwargs,
+        model_kwargs=model_kwargs,
+        output_dir=output_dir,
+    )
+
+    return all_results
 
 
 def main():
@@ -2417,4 +2748,14 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    sys.setrecursionlimit(15000)
+    new_workflow(
+        perturbation_type="lmp",
+        prediction_horizon_length=12,
+        optimization_type="ro_imperfect",
+        lmp_wind_perturb_params=(5, 10),
+        scenario_idxs=list(range(10)),
+        max_parallel_scenarios=5,
+        starting_interval=2000,
+    )
